@@ -9,11 +9,16 @@ This project provides a set of utilities for managing SVG files and paper sizes 
    pip install -r requirements.txt
    ```
 
+2. Install the CLI tool:
+   ```bash
+   pip install .
+   ```
+
 ## Usage
 
 Run the CLI with the following command:
 ```bash
-python -m plotter [OPTIONS] COMMAND [ARGS]
+plotter [OPTIONS] COMMAND [ARGS]
 ```
 
 ### Commands
@@ -28,7 +33,7 @@ python -m plotter [OPTIONS] COMMAND [ARGS]
 
 If no command is specified, the `check` command is executed by default. You can provide an SVG file using the `--file` or `-f` option:
 ```bash
-python -m plotter --file path/to/your/file.svg
+plotter --file path/to/your/file.svg
 ```
 
 ## Contributing

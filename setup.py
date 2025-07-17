@@ -12,7 +12,7 @@ setup(
     ],
     entry_points={
         "console_scripts": [
-            "plotter=cli.commands:app",
+            "plotter=plotter_cli.commands:app",
         ],
     },
     author="Your Name",
@@ -23,4 +23,8 @@ setup(
         "Operating System :: OS Independent",
     ],
     python_requires=">=3.6",
+    package_data={
+        "plotter_cli": ["settings.yaml", ".vpype.toml"],
+    },
+    include_package_data=True,
 )

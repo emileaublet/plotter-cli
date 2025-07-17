@@ -1,10 +1,11 @@
 import yaml
 import xml.etree.ElementTree as ET
+import importlib.resources
 
 
 # Load settings from the YAML file
 def load_settings():
-    with open("settings.yaml", "r") as file:
+    with importlib.resources.open_text("plotter_cli", "settings.yaml") as file:
         return yaml.safe_load(file)
 
 

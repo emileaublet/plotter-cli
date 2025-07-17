@@ -26,4 +26,4 @@ dependencies = [
 ]
 
 [project.scripts]
-plotter = "cli.commands:app"
+plotter = "plotter_cli.commands:app"

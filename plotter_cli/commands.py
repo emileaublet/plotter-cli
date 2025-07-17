@@ -2,6 +2,7 @@ import os
 import subprocess
 import typer
 import questionary
+import importlib.resources
 from .utils import load_settings, get_svg_dimensions
 from rich.console import Console
 from rich.panel import Panel
@@ -260,12 +261,14 @@ def process(
         output_folder, f"{svg_name_without_ext}_%_color or _lid%.gcode"
     )
 
-    vpype_command = (
-        f"vpype -c cli/.vpype.toml read --attr stroke {svg_file} rect -l 999 0 0 {svg_width} {svg_height} "
-        f"scaleto {custom_width}{unit} {custom_height}{unit} layout {area_width}{unit}x{area_height}{unit} "
-        f"ldelete 999 forlayer linemerge linesort --two-opt --passes 2000 "
-        f'gwrite -p penplotte "{output_path}" end'
-    )
+    # Dynamically locate the .vpype.toml file
+    with importlib.resources.path("plotter_cli", ".vpype.toml") as toml_path:
+        vpype_command = (
+            f"vpype -c {toml_path} read --attr stroke {svg_file} rect -l 999 0 0 {svg_width} {svg_height} "
+            f"scaleto {custom_width}{unit} {custom_height}{unit} layout {area_width}{unit}x{area_height}{unit} "
+            f"ldelete 999 forlayer linemerge linesort --two-opt --passes 2000 "
+            f'gwrite -p penplotte "{output_path}" end'
+        )
 
     # Execute the vpype command
     try:
