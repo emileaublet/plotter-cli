@@ -1,4 +1,4 @@
-# VPype Utils
+# Plotter CLI
 
 This project provides a set of utilities for managing SVG files and paper sizes using a command-line interface (CLI).
 
