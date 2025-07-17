@@ -3,7 +3,7 @@ import subprocess
 import typer
 import questionary
 import importlib.resources
-from .utils import load_settings, get_svg_dimensions
+from .utils import load_settings, get_svg_dimensions, generate_boundary_gcode
 from rich.console import Console
 from rich.panel import Panel
 
@@ -374,6 +374,200 @@ def manage_papers(
         yaml.dump(settings, f)
 
     console.print(Panel("[INFO] Changes saved to settings.yaml.", style="bold blue"))
+
+
+@app.command("generate-boundary")
+def generate_boundary(
+    output: str = typer.Option(
+        None, "--output", "-o", help="Destination folder to save the G-code file"
+    )
+):
+    """
+    Generate G-code to draw boundaries for a selected paper size or custom dimensions.
+    """
+    settings = load_settings()
+
+    # Get area dimensions from settings
+    area_width = settings["general"]["area_width"]
+    area_height = settings["general"]["area_height"]
+
+    # Prompt user to select paper size or custom dimensions
+    options = [
+        f"{paper['name']} ({paper['width']}mm x {paper['height']}mm)"
+        for paper in settings["papers"]
+    ]
+    options.append("Custom")
+
+    choice = questionary.select("Select a paper size:", choices=options).ask()
+
+    if choice == "Custom":
+        paper_width = typer.prompt("Enter custom width in mm", type=float)
+        paper_height = typer.prompt("Enter custom height in mm", type=float)
+    else:
+        selected_paper = next(
+            paper
+            for paper in settings["papers"]
+            if f"{paper['name']} ({paper['width']}mm x {paper['height']}mm)" == choice
+        )
+        paper_width = selected_paper["width"]
+        paper_height = selected_paper["height"]
+
+    gcode_filename = f"boundary_{paper_width}x{paper_height}.gcode"
+
+    if output:
+        # Expand ~ and resolve relative paths
+        output = os.path.abspath(os.path.expanduser(output))
+
+        os.makedirs(output, exist_ok=True)
+        gcode_path = os.path.join(output, gcode_filename)
+    else:
+        gcode_path = gcode_filename
+
+    # Dynamically locate the .vpype.toml file
+    with importlib.resources.path("plotter_cli", ".vpype.toml") as toml_path:
+        vpype_command = (
+            f"vpype -c {toml_path} rect 0 0 {paper_width}mm {paper_height}mm "
+            f"layout {area_width}mmx{area_height}mm linemerge linesort --two-opt --passes 2000 "
+            f"gwrite -p penplotte {gcode_path}"
+        )
+
+    # Set a valid working directory
+    os.chdir("/Users/emileaublet/Dev")
+
+    # Execute the vpype command
+    try:
+        subprocess.run(vpype_command, shell=True, check=True)
+
+        # Validate file creation
+        files_created = []
+        if os.path.exists(gcode_path):
+            files_created.append(f"G-code file: {os.path.abspath(gcode_path)}")
+
+        if files_created:
+            console.print(
+                Panel(
+                    f"[SUCCESS] Files successfully created:\n"
+                    + "\n".join(files_created),
+                    style="bold green",
+                )
+            )
+        else:
+            console.print(
+                Panel(
+                    "[ERROR] No files were created. Please check the command execution.",
+                    style="bold red",
+                )
+            )
+    except subprocess.CalledProcessError as e:
+        console.print(
+            Panel(f"[ERROR] Failed to execute vpype command: {e}", style="bold red")
+        )
+        raise typer.Exit(code=1)
+
+
+@app.command("calibrate")
+def calibrate(
+    output: str = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="Destination folder to save the calibration G-code file",
+    )
+):
+    """
+    Generate G-code to draw a grid of spaced crosses for calibration purposes.
+    """
+    settings = load_settings()
+
+    # Get area dimensions from settings
+    area_width = settings["general"]["area_width"]
+    area_height = settings["general"]["area_height"]
+
+    # Prompt user to select paper size or custom dimensions
+    options = [
+        f"{paper['name']} ({paper['width']}mm x {paper['height']}mm)"
+        for paper in settings["papers"]
+    ]
+    options.append("Custom")
+
+    choice = questionary.select("Select a paper size:", choices=options).ask()
+
+    if choice == "Custom":
+        paper_width = typer.prompt("Enter custom width in mm", type=float)
+        paper_height = typer.prompt("Enter custom height in mm", type=float)
+    else:
+        selected_paper = next(
+            paper
+            for paper in settings["papers"]
+            if f"{paper['name']} ({paper['width']}mm x {paper['height']}mm)" == choice
+        )
+        paper_width = selected_paper["width"]
+        paper_height = selected_paper["height"]
+
+    gcode_filename = f"calibration_grid_{paper_width}x{paper_height}.gcode"
+
+    if output:
+        # Expand ~ and resolve relative paths
+        output = os.path.abspath(os.path.expanduser(output))
+
+        os.makedirs(output, exist_ok=True)
+        gcode_path = os.path.join(output, gcode_filename)
+    else:
+        gcode_path = gcode_filename
+
+    cellsize = 40
+    columns = int(paper_width // cellsize)
+    rows = int(paper_height // cellsize)
+    column_width = paper_width / columns
+    row_height = paper_height / rows
+
+    line_length = cellsize / 2
+    horizontal_start = (column_width - line_length) / 2
+    vertical_start = (row_height - line_length) / 2
+    horizontal_end = horizontal_start + line_length
+    vertical_end = vertical_start + line_length
+    # Dynamically locate the .vpype.toml file
+    with importlib.resources.path("plotter_cli", ".vpype.toml") as toml_path:
+        vpype_command = (
+            f"vpype -c {toml_path} "
+            f"grid -o {column_width}mm {row_height}mm {columns} {rows} line {horizontal_start}mm {column_width/2}mm {horizontal_end}mm {column_width/2}mm end "
+            f"grid -o {column_width}mm {row_height}mm {columns} {rows} line {row_height/2}mm {vertical_start}mm {row_height/2}mm {vertical_end}mm end "
+            f"layout {area_width}mmx{area_height}mm linemerge linesort --two-opt --passes 2000 "
+            f"gwrite -p penplotte {gcode_path}"
+        )
+
+    # Set a valid working directory
+    os.chdir("/Users/emileaublet/Dev")
+
+    # Execute the vpype command
+    try:
+        subprocess.run(vpype_command, shell=True, check=True)
+
+        # Validate file creation
+        files_created = []
+        if os.path.exists(gcode_path):
+            files_created.append(f"G-code file: {os.path.abspath(gcode_path)}")
+
+        if files_created:
+            console.print(
+                Panel(
+                    f"[SUCCESS] Calibration grid successfully created:\n"
+                    + "\n".join(files_created),
+                    style="bold green",
+                )
+            )
+        else:
+            console.print(
+                Panel(
+                    "[ERROR] No files were created. Please check the command execution.",
+                    style="bold red",
+                )
+            )
+    except subprocess.CalledProcessError as e:
+        console.print(
+            Panel(f"[ERROR] Failed to execute vpype command: {e}", style="bold red")
+        )
+        raise typer.Exit(code=1)
 
 
 if __name__ == "__main__":
