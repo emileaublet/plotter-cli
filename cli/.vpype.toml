@@ -1,0 +1,27 @@
+[gwrite.penplotte]
+unit = "mm"
+invert_y = true
+
+document_start = """G21 ; Set units to mm
+G90 ; Absolute positioning
+G1 Z1.4 F3500 ; Pen up
+"""
+
+layer_start = "; --- Start Layer ---\n"
+
+line_start = "; --- Start Line ---\n"
+
+segment_first = """G1 Z1.4 F3500 ; Pen up before move
+G0 X{x:.4f} Y{y:.4f}
+G1 Z0 F3500 ; Pen down
+"""
+
+segment = """G1 X{x:.4f} Y{y:.4f}\n"""
+
+line_end = """G1 Z1.4 F3500 ; Pen up\n"""
+
+document_end = """G1 Z1.4 F3500 ; Pen up
+G0 X0.0000 Y0.0000 ; Return to home
+G1 Z1.4 F3500 ; Stay pen up
+M2 ; End of program
+"""

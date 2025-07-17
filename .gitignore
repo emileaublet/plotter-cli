@@ -1,0 +1,85 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+env/
+build/
+dist/
+*.egg-info/
+*.egg
+
+# Installer logs
+test-reports/
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.coverage
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# pyenv
+.python-version
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+.envrc
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Logs
+*.log
+*.out
+*.err
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.old
+*.orig
+*.swp
+*.swo
+*.swn
+
+# Generated files
+*.manifest
+*.spec
+
+# MyPy
+.mypy_cache/
+.dmypy.json
+
+# Pyre
+.pyre/
+
+# Profiling data
+.prof
+
+# pytest
+.pytest_cache/
