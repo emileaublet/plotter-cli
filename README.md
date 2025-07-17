@@ -4,13 +4,7 @@ This project provides a set of utilities for managing SVG files and paper sizes 
 
 ## Installation
 
-1. Clone the repository:
-   ```bash
-   git clone <repository-url>
-   cd vpype-utils
-   ```
-
-2. Install the required dependencies:
+1. Install the required dependencies:
    ```bash
    pip install -r requirements.txt
    ```
