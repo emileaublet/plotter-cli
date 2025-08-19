@@ -1,6 +1,6 @@
 general:
-  area_height: 480
-  area_width: 395
+  area_height: 460
+  area_width: 385
 papers:
   - height: 304.79999999999995
     name: 9x12
