@@ -3,7 +3,12 @@ import subprocess
 import typer
 import questionary
 import importlib.resources
-from .utils import load_settings, get_svg_dimensions, generate_boundary_gcode
+from .utils import (
+    load_settings,
+    get_svg_dimensions,
+    generate_boundary_gcode,
+    update_vpype_config_with_z_settings,
+)
 from rich.console import Console
 from rich.panel import Panel
 
@@ -261,17 +266,25 @@ def process(
         output_folder, f"{svg_name_without_ext}_%_color or _lid%.gcode"
     )
 
-    # Dynamically locate the .vpype.toml file
-    with importlib.resources.path("plotter_cli", ".vpype.toml") as toml_path:
+    # Dynamically locate the .vpype.toml file and update it with Z settings and feed rates
+    z_up = settings["general"].get("z_up", 20)
+    z_down = settings["general"].get("z_down", 0)
+    feed_rate_draw = settings["general"].get("feed_rate_draw", 3000)
+    feed_rate_travel = settings["general"].get("feed_rate_travel", 6000)
+    feed_rate_z = settings["general"].get("feed_rate_z", 1500)
+    temp_config_path = update_vpype_config_with_z_settings(
+        z_up, z_down, feed_rate_draw, feed_rate_travel, feed_rate_z
+    )
+
+    try:
         vpype_command = (
-            f"vpype -c {toml_path} read --attr stroke {svg_file} rect -l 999 0 0 {svg_width} {svg_height} "
+            f"vpype -c {temp_config_path} read --attr stroke {svg_file} rect -l 999 0 0 {svg_width} {svg_height} "
             f"scaleto {custom_width}{unit} {custom_height}{unit} layout {area_width}{unit}x{area_height}{unit} "
             f"ldelete 999 forlayer linemerge linesort --two-opt --passes 2000 "
             f'gwrite -p penplotte "{output_path}" end'
         )
 
-    # Execute the vpype command
-    try:
+        # Execute the vpype command
         subprocess.run(vpype_command, shell=True, check=True)
 
         # List all generated files in the output folder
@@ -289,6 +302,10 @@ def process(
             Panel(f"[ERROR] Failed to execute vpype command: {e}", style="bold red")
         )
         raise typer.Exit(code=1)
+    finally:
+        # Clean up temporary config file
+        if os.path.exists(temp_config_path):
+            os.unlink(temp_config_path)
 
 
 @app.command("manage-papers")
@@ -423,19 +440,27 @@ def generate_boundary(
     else:
         gcode_path = gcode_filename
 
-    # Dynamically locate the .vpype.toml file
-    with importlib.resources.path("plotter_cli", ".vpype.toml") as toml_path:
+    # Dynamically update the .vpype.toml file with Z settings and feed rates
+    z_up = settings["general"].get("z_up", 20)
+    z_down = settings["general"].get("z_down", 0)
+    feed_rate_draw = settings["general"].get("feed_rate_draw", 3000)
+    feed_rate_travel = settings["general"].get("feed_rate_travel", 6000)
+    feed_rate_z = settings["general"].get("feed_rate_z", 1500)
+    temp_config_path = update_vpype_config_with_z_settings(
+        z_up, z_down, feed_rate_draw, feed_rate_travel, feed_rate_z
+    )
+
+    try:
         vpype_command = (
-            f"vpype -c {toml_path} rect 0 0 {paper_width}mm {paper_height}mm "
+            f"vpype -c {temp_config_path} rect 0 0 {paper_width}mm {paper_height}mm "
             f"layout {area_width}mmx{area_height}mm linemerge linesort --two-opt --passes 2000 "
             f"gwrite -p penplotte {gcode_path}"
         )
 
-    # Set a valid working directory
-    os.chdir("/Users/emileaublet/Dev")
+        # Set a valid working directory
+        os.chdir("/Users/emileaublet/Dev")
 
-    # Execute the vpype command
-    try:
+        # Execute the vpype command
         subprocess.run(vpype_command, shell=True, check=True)
 
         # Validate file creation
@@ -463,6 +488,10 @@ def generate_boundary(
             Panel(f"[ERROR] Failed to execute vpype command: {e}", style="bold red")
         )
         raise typer.Exit(code=1)
+    finally:
+        # Clean up temporary config file
+        if os.path.exists(temp_config_path):
+            os.unlink(temp_config_path)
 
 
 @app.command("calibrate")
@@ -475,7 +504,8 @@ def calibrate(
     )
 ):
     """
-    Generate G-code to draw a grid of spaced crosses for calibration purposes.
+    Generate G-code to draw a square spiral for calibration purposes.
+    The spiral covers most of the paper surface, leaving a small margin from edges.
     """
     settings = load_settings()
 
@@ -504,7 +534,7 @@ def calibrate(
         paper_width = selected_paper["width"]
         paper_height = selected_paper["height"]
 
-    gcode_filename = f"calibration_grid_{paper_width}x{paper_height}.gcode"
+    gcode_filename = f"calibration_spiral_{paper_width}x{paper_height}.gcode"
 
     if output:
         # Expand ~ and resolve relative paths
@@ -515,32 +545,59 @@ def calibrate(
     else:
         gcode_path = gcode_filename
 
-    cellsize = 40
-    columns = int(paper_width // cellsize)
-    rows = int(paper_height // cellsize)
-    column_width = paper_width / columns
-    row_height = paper_height / rows
+    # Create a square spiral that covers most of the surface
+    # Leave some margin from edges for safety
+    margin = 10  # mm margin from edges
+    spiral_width = paper_width - (2 * margin)
+    spiral_height = paper_height - (2 * margin)
+    spiral_start_x = margin
+    spiral_start_y = margin
 
-    line_length = cellsize / 2
-    horizontal_start = (column_width - line_length) / 2
-    vertical_start = (row_height - line_length) / 2
-    horizontal_end = horizontal_start + line_length
-    vertical_end = vertical_start + line_length
-    # Dynamically locate the .vpype.toml file
-    with importlib.resources.path("plotter_cli", ".vpype.toml") as toml_path:
+    # Calculate number of spiral loops based on paper size
+    # Each loop goes inward by 5mm
+    step_size = 5  # mm between spiral lines
+    max_loops = int(min(spiral_width, spiral_height) // (2 * step_size))
+
+    # Dynamically update the .vpype.toml file with Z settings and feed rates
+    z_up = settings["general"].get("z_up", 20)
+    z_down = settings["general"].get("z_down", 0)
+    feed_rate_draw = settings["general"].get("feed_rate_draw", 3000)
+    feed_rate_travel = settings["general"].get("feed_rate_travel", 6000)
+    feed_rate_z = settings["general"].get("feed_rate_z", 1500)
+    temp_config_path = update_vpype_config_with_z_settings(
+        z_up, z_down, feed_rate_draw, feed_rate_travel, feed_rate_z
+    )
+
+    try:
+        # Create the square spiral using vpype's rect command with multiple inset rectangles
+        spiral_rects = []
+        for i in range(max_loops):
+            inset = i * step_size
+            rect_x = spiral_start_x + inset
+            rect_y = spiral_start_y + inset
+            rect_width = spiral_width - (2 * inset)
+            rect_height = spiral_height - (2 * inset)
+
+            # Only add rectangle if it has positive dimensions
+            if rect_width > 0 and rect_height > 0:
+                spiral_rects.append(
+                    f"rect {rect_x}mm {rect_y}mm {rect_width}mm {rect_height}mm"
+                )
+
+        # Join all rectangle commands
+        rect_commands = " ".join(spiral_rects)
+
         vpype_command = (
-            f"vpype -c {toml_path} "
-            f"grid -o {column_width}mm {row_height}mm {columns} {rows} line {horizontal_start}mm {column_width/2}mm {horizontal_end}mm {column_width/2}mm end "
-            f"grid -o {column_width}mm {row_height}mm {columns} {rows} line {row_height/2}mm {vertical_start}mm {row_height/2}mm {vertical_end}mm end "
+            f"vpype -c {temp_config_path} "
+            f"{rect_commands} "
             f"layout {area_width}mmx{area_height}mm linemerge linesort --two-opt --passes 2000 "
             f"gwrite -p penplotte {gcode_path}"
         )
 
-    # Set a valid working directory
-    os.chdir("/Users/emileaublet/Dev")
+        # Set a valid working directory
+        os.chdir("/Users/emileaublet/Dev")
 
-    # Execute the vpype command
-    try:
+        # Execute the vpype command
         subprocess.run(vpype_command, shell=True, check=True)
 
         # Validate file creation
@@ -551,7 +608,7 @@ def calibrate(
         if files_created:
             console.print(
                 Panel(
-                    f"[SUCCESS] Calibration grid successfully created:\n"
+                    f"[SUCCESS] Calibration spiral successfully created:\n"
                     + "\n".join(files_created),
                     style="bold green",
                 )
@@ -568,6 +625,10 @@ def calibrate(
             Panel(f"[ERROR] Failed to execute vpype command: {e}", style="bold red")
         )
         raise typer.Exit(code=1)
+    finally:
+        # Clean up temporary config file
+        if os.path.exists(temp_config_path):
+            os.unlink(temp_config_path)
 
 
 if __name__ == "__main__":

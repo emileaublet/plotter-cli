@@ -4,15 +4,51 @@ This project provides a set of utilities for managing SVG files and paper sizes 
 
 ## Installation
 
-1. Install the required dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
+### Option 1: Development Installation (Recommended for development)
+Install in editable mode so changes to your code are immediately reflected:
+```bash
+cd /path/to/plotter-cli
+pip install -e .
+```
 
-2. Install the CLI tool:
-   ```bash
-   pip install .
-   ```
+### Option 2: Standard Installation
+Install the package globally in your Python environment:
+```bash
+cd /path/to/plotter-cli
+pip install .
+```
+
+### Option 3: Install with Dependencies
+Install dependencies first, then the package:
+```bash
+cd /path/to/plotter-cli
+pip install -r requirements.txt
+pip install .
+```
+
+### Option 4: Build and Install as Package
+Create distribution packages and install from wheel:
+```bash
+cd /path/to/plotter-cli
+python -m build
+pip install dist/plotter-1.0.0-py3-none-any.whl
+```
+
+### Verification
+To verify the installation worked:
+```bash
+which plotter
+plotter --help
+```
+
+After installation, you can use the CLI globally from anywhere:
+```bash
+plotter list
+plotter check your_file.svg
+plotter process your_file.svg
+plotter generate-boundary -o ~/Desktop
+plotter calibrate -o ~/Desktop
+```
 
 ## Usage
 
