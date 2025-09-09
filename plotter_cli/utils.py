@@ -78,7 +78,13 @@ M2 ; End of program
 
 
 def update_vpype_config_with_z_settings(
-    z_up=20, z_down=0, feed_rate_draw=3000, feed_rate_travel=6000, feed_rate_z=1500
+    z_up=20,
+    z_down=0,
+    feed_rate_draw=3000,
+    feed_rate_travel=6000,
+    feed_rate_z=1500,
+    area_max_x=385,
+    area_max_y=460,
 ):
     """
     Update the .vpype.toml configuration file with Z settings and feed rates from the YAML configuration.
@@ -89,6 +95,8 @@ def update_vpype_config_with_z_settings(
         feed_rate_draw (int): Feed rate for drawing movements in mm/min.
         feed_rate_travel (int): Feed rate for travel movements in mm/min.
         feed_rate_z (int): Feed rate for Z-axis movements in mm/min.
+        area_max_x (float): Maximum X area in mm.
+        area_max_y (float): Maximum Y area in mm.
 
     Returns:
         str: Path to the updated configuration file.
@@ -104,9 +112,13 @@ invert_y = true
 document_start = \"\"\"G21 ; Set units to mm
 G90 ; Absolute positioning
 G1 Z{z_up} F{feed_rate_z} ; Pen up
+
+G0 X0.0000 Y0.0000 F{feed_rate_travel} ; Move to origin
+G1 Z{z_up} F{feed_rate_z} ; Stay pen up
+
 \"\"\"
 
-layer_start = "; --- Start Layer ---\\n"
+layer_start = "; --- Start Layer ---\\nG90 ; Absolute positioning\\n"
 
 line_start = "; --- Start Line ---\\n"
 

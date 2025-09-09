@@ -262,9 +262,7 @@ def process(
     output_folder = os.path.join(os.path.dirname(svg_file), svg_name_without_ext)
     os.makedirs(output_folder, exist_ok=True)
 
-    output_path = os.path.join(
-        output_folder, f"{svg_name_without_ext}_%_color or _lid%.gcode"
-    )
+    output_path = os.path.join(output_folder, f"{svg_name_without_ext}_%_color%.gcode")
 
     # Dynamically locate the .vpype.toml file and update it with Z settings and feed rates
     z_up = settings["general"].get("z_up", 20)
@@ -272,18 +270,37 @@ def process(
     feed_rate_draw = settings["general"].get("feed_rate_draw", 3000)
     feed_rate_travel = settings["general"].get("feed_rate_travel", 6000)
     feed_rate_z = settings["general"].get("feed_rate_z", 1500)
+    area_max_x = settings["general"].get("area_width", 385)
+    area_max_y = settings["general"].get("area_height", 460)
+    registration_marks_length = settings["general"].get("registration_marks_length", 4)
     temp_config_path = update_vpype_config_with_z_settings(
-        z_up, z_down, feed_rate_draw, feed_rate_travel, feed_rate_z
+        z_up,
+        z_down,
+        feed_rate_draw,
+        feed_rate_travel,
+        feed_rate_z,
+        area_max_x,
+        area_max_y,
     )
 
     try:
         vpype_command = (
-            f"vpype -c {temp_config_path} read --attr stroke {svg_file} rect -l 999 0 0 {svg_width} {svg_height} "
-            f"scaleto {custom_width}{unit} {custom_height}{unit} layout {area_width}{unit}x{area_height}{unit} "
-            f"ldelete 999 forlayer linemerge linesort --two-opt --passes 2000 "
-            f'gwrite -p penplotte "{output_path}" end'
+            f"vpype -c {temp_config_path} "
+            f"read --attr stroke {svg_file} "
+            f"scaleto {custom_width}{unit} {custom_height}{unit} "
+            f"layout {area_width}{unit}x{area_height}{unit} "
+            f"forlayer "
+            f"lmove all 999 "
+            f"linemerge linesort --two-opt --passes 2000 "
+            f"rect {registration_marks_length}mm {registration_marks_length}mm {registration_marks_length}mm {registration_marks_length}mm "
+            f"rect {area_width - 2 * registration_marks_length}mm {registration_marks_length}mm {registration_marks_length}mm {registration_marks_length}mm "
+            f"rect {registration_marks_length}mm {area_height - 2 * registration_marks_length}mm {registration_marks_length}mm {registration_marks_length}mm "
+            f"rect {area_width - 2 * registration_marks_length}mm {area_height - 2 * registration_marks_length}mm {registration_marks_length}mm {registration_marks_length}mm "
+            f"lmove 1 1 "
+            f"lmove 999 2 "
+            f"gwrite -p penplotte {output_path} "
+            f"end"
         )
-
         # Execute the vpype command
         subprocess.run(vpype_command, shell=True, check=True)
 
