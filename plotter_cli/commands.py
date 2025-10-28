@@ -3,14 +3,23 @@ import subprocess
 import typer
 import questionary
 import importlib.resources
+from pathlib import Path
 from .utils import (
     load_settings,
     get_svg_dimensions,
     generate_boundary_gcode,
     update_vpype_config_with_z_settings,
 )
+from .gcode_parser import GCodeParser
 from rich.console import Console
 from rich.panel import Panel
+from rich.progress import (
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+    BarColumn,
+    TaskProgressColumn,
+)
 
 app = typer.Typer(no_args_is_help=True)
 console = Console()
@@ -265,7 +274,7 @@ def process(
     output_path = os.path.join(output_folder, f"{svg_name_without_ext}_%_color%.gcode")
 
     # Dynamically locate the .vpype.toml file and update it with Z settings and feed rates
-    z_up = settings["general"].get("z_up", 20)
+    z_up = settings["general"].get("z_up_long", 20)
     z_down = settings["general"].get("z_down", 0)
     feed_rate_draw = settings["general"].get("feed_rate_draw", 3000)
     feed_rate_travel = settings["general"].get("feed_rate_travel", 6000)
@@ -274,21 +283,24 @@ def process(
     area_max_y = settings["general"].get("area_height", 460)
     registration_marks_length = settings["general"].get("registration_marks_length", 4)
     temp_config_path = update_vpype_config_with_z_settings(
-        z_up,
-        z_down,
-        feed_rate_draw,
-        feed_rate_travel,
-        feed_rate_z,
-        area_max_x,
-        area_max_y,
+        z_up_long=z_up,
+        z_down=z_down,
+        feed_rate_draw=feed_rate_draw,
+        feed_rate_travel=feed_rate_travel,
+        feed_rate_z=feed_rate_z,
+        area_max_x=area_max_x,
+        area_max_y=area_max_y,
     )
 
     try:
         vpype_command = (
             f"vpype -c {temp_config_path} "
             f"read --attr stroke {svg_file} "
-            f"scaleto {custom_width}{unit} {custom_height}{unit} "
-            f"layout {area_width}{unit}x{area_height}{unit} "
+            f"rect -l 998 0 0 {svg_width} {svg_height} "
+            # f"scaleto {custom_width}{unit} {custom_height}{unit} layout {area_width}{unit}x{area_height}{unit} "
+            f"scaleto {custom_width}{unit} {custom_height}{unit} layout {area_width}{unit}x{area_height}{unit} "
+            f"ldelete 998 "
+            # f"layout {area_width}{unit}x{area_height}{unit} "
             f"forlayer "
             f"lmove all 999 "
             f"linemerge linesort --two-opt --passes 2000 "
@@ -301,11 +313,78 @@ def process(
             f"gwrite -p penplotte {output_path} "
             f"end"
         )
-        # Execute the vpype command
-        subprocess.run(vpype_command, shell=True, check=True)
+
+        # Execute the vpype command with progress indication
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            console=console,
+        ) as progress:
+            task = progress.add_task("[cyan]Processing SVG with vpype...", total=None)
+            subprocess.run(vpype_command, shell=True, check=True)
+            progress.update(task, completed=True)
+
+        # Post-process all generated G-code files with dynamic Z adjustment
+        generated_files = os.listdir(output_folder)
+        gcode_files = [f for f in generated_files if f.endswith(".gcode")]
+
+        if gcode_files:
+            console.print(
+                "\n[bold cyan]Post-processing G-code files with dynamic Z adjustment...[/bold cyan]"
+            )
+
+            # Get Z settings from the settings file
+            z_up_long = settings["general"].get("z_up_long", 10.0)
+            z_up_short = settings["general"].get("z_up_short", 4.0)
+            z_up_threshold = settings["general"].get("z_up_threshold", 1.5)
+
+            # Initialize the G-code parser with settings values
+            parser = GCodeParser(
+                long_distance_z=z_up_long,
+                short_distance_z=z_up_short,
+                short_distance_mm=z_up_threshold,
+            )
+
+            # Process each G-code file with progress bar
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                TaskProgressColumn(),
+                console=console,
+            ) as progress:
+                total_files = len(gcode_files)
+                task = progress.add_task(
+                    f"[green]Processing {total_files} G-code file(s)...",
+                    total=total_files,
+                )
+
+                for idx, gcode_file in enumerate(gcode_files, 1):
+                    file_path = Path(output_folder) / gcode_file
+                    progress.update(
+                        task,
+                        description=f"[green]Processing [{idx}/{total_files}] {gcode_file}...",
+                    )
+                    try:
+                        parser.parse_file(file_path)
+                        progress.advance(task)
+                    except Exception as e:
+                        console.print(
+                            f"  [red]✗ Failed to process {gcode_file}: {e}[/red]"
+                        )
+                        progress.advance(task)
+
+            console.print(f"\n[bold green]Post-processing complete![/bold green]")
+            console.print(
+                f"  • Long distance Z: {z_up_long}mm (for travels > {z_up_threshold}mm)"
+            )
+            console.print(
+                f"  • Short distance Z: {z_up_short}mm (for travels ≤ {z_up_threshold}mm)"
+            )
 
         # List all generated files in the output folder
-        generated_files = os.listdir(output_folder)
         file_list = "\n".join([f"- {file}" for file in generated_files])
 
         console.print(
@@ -458,13 +537,17 @@ def generate_boundary(
         gcode_path = gcode_filename
 
     # Dynamically update the .vpype.toml file with Z settings and feed rates
-    z_up = settings["general"].get("z_up", 20)
+    z_up = settings["general"].get("z_up_long", 20)
     z_down = settings["general"].get("z_down", 0)
     feed_rate_draw = settings["general"].get("feed_rate_draw", 3000)
     feed_rate_travel = settings["general"].get("feed_rate_travel", 6000)
     feed_rate_z = settings["general"].get("feed_rate_z", 1500)
     temp_config_path = update_vpype_config_with_z_settings(
-        z_up, z_down, feed_rate_draw, feed_rate_travel, feed_rate_z
+        z_up_long=z_up,
+        z_down=z_down,
+        feed_rate_draw=feed_rate_draw,
+        feed_rate_travel=feed_rate_travel,
+        feed_rate_z=feed_rate_z,
     )
 
     try:
@@ -576,13 +659,17 @@ def calibrate(
     max_loops = int(min(spiral_width, spiral_height) // (2 * step_size))
 
     # Dynamically update the .vpype.toml file with Z settings and feed rates
-    z_up = settings["general"].get("z_up", 20)
+    z_up = settings["general"].get("z_up_long", 20)
     z_down = settings["general"].get("z_down", 0)
     feed_rate_draw = settings["general"].get("feed_rate_draw", 3000)
     feed_rate_travel = settings["general"].get("feed_rate_travel", 6000)
     feed_rate_z = settings["general"].get("feed_rate_z", 1500)
     temp_config_path = update_vpype_config_with_z_settings(
-        z_up, z_down, feed_rate_draw, feed_rate_travel, feed_rate_z
+        z_up_long=z_up,
+        z_down=z_down,
+        feed_rate_draw=feed_rate_draw,
+        feed_rate_travel=feed_rate_travel,
+        feed_rate_z=feed_rate_z,
     )
 
     try:

@@ -19,7 +19,7 @@ def get_svg_dimensions(svg_file):
 
 
 def generate_boundary_gcode(
-    paper_width, paper_height, area_width, area_height, z_up=20, z_down=0
+    paper_width, paper_height, area_width, area_height, z_up_long=20, z_down=0
 ):
     """
     Generate G-code to draw boundaries for a selected paper size.
@@ -29,7 +29,7 @@ def generate_boundary_gcode(
         paper_height (float): Height of the paper in mm.
         area_width (float): Width of the area in mm.
         area_height (float): Height of the area in mm.
-        z_up (float): Z position when pen is up in mm.
+        z_up_long (float): Z position when pen is up in mm.
         z_down (float): Z position when pen is down in mm.
 
     Returns:
@@ -45,31 +45,31 @@ def generate_boundary_gcode(
     gcode = f"""
 G21 ; Set units to mm
 G90 ; Absolute positioning
-G1 Z{z_up} F3500 ; Pen up
+G1 Z{z_up_long} F3500 ; Pen up
 
 ; Top-left corner
 G0 X{top_left[0]:.2f} Y{top_left[1]:.2f}
 G1 Z{z_down} F3500 ; Pen down
 G1 X{top_left[0]:.2f} Y{top_left[1]:.2f}
-G1 Z{z_up} F3500 ; Pen up
+G1 Z{z_up_long} F3500 ; Pen up
 
 ; Top-right corner
 G0 X{top_right[0]:.2f} Y{top_right[1]:.2f}
 G1 Z{z_down} F3500 ; Pen down
 G1 X{top_right[0]:.2f} Y{top_right[1]:.2f}
-G1 Z{z_up} F3500 ; Pen up
+G1 Z{z_up_long} F3500 ; Pen up
 
 ; Bottom-left corner
 G0 X{bottom_left[0]:.2f} Y{bottom_left[1]:.2f}
 G1 Z{z_down} F3500 ; Pen down
 G1 X{bottom_left[0]:.2f} Y{bottom_left[1]:.2f}
-G1 Z{z_up} F3500 ; Pen up
+G1 Z{z_up_long} F3500 ; Pen up
 
 ; Bottom-right corner
 G0 X{bottom_right[0]:.2f} Y{bottom_right[1]:.2f}
 G1 Z{z_down} F3500 ; Pen down
 G1 X{bottom_right[0]:.2f} Y{bottom_right[1]:.2f}
-G1 Z{z_up} F3500 ; Pen up
+G1 Z{z_up_long} F3500 ; Pen up
 
 M2 ; End of program
 """
@@ -78,7 +78,7 @@ M2 ; End of program
 
 
 def update_vpype_config_with_z_settings(
-    z_up=20,
+    z_up_long=20,
     z_down=0,
     feed_rate_draw=3000,
     feed_rate_travel=6000,
@@ -90,7 +90,7 @@ def update_vpype_config_with_z_settings(
     Update the .vpype.toml configuration file with Z settings and feed rates from the YAML configuration.
 
     Parameters:
-        z_up (float): Z position when pen is up in mm.
+        z_up_long (float): Z position when pen is up in mm.
         z_down (float): Z position when pen is down in mm.
         feed_rate_draw (int): Feed rate for drawing movements in mm/min.
         feed_rate_travel (int): Feed rate for travel movements in mm/min.
@@ -111,31 +111,30 @@ invert_y = true
 
 document_start = \"\"\"G21 ; Set units to mm
 G90 ; Absolute positioning
-G1 Z{z_up} F{feed_rate_z} ; Pen up
+G1 Z{z_up_long} F{feed_rate_z} ; Pen up
 
 G0 X0.0000 Y0.0000 F{feed_rate_travel} ; Move to origin
-G1 Z{z_up} F{feed_rate_z} ; Stay pen up
+G1 Z{z_up_long} F{feed_rate_z} ; Stay pen up
 
 \"\"\"
 
-layer_start = "; --- Start Layer ---\\nG90 ; Absolute positioning\\n"
+layer_start = "; --- Start Layer {{layer_index}} ---\\n"
+line_start = "; --- Start Line {{lines_index}} X{{x:.8f}} Y{{y:.8f}} ---\\n"
 
-line_start = "; --- Start Line ---\\n"
-
-segment_first = \"\"\"G1 Z{z_up} F{feed_rate_z} ; Pen up before move
-G0 X{{x:.4f}} Y{{y:.4f}} F{feed_rate_travel} ; Travel to start
+segment_first = \"\"\"G1 Z{z_up_long} F{feed_rate_z} ; Pen up before move
+G0 X{{x:.8f}} Y{{y:.8f}} F{feed_rate_travel} ; Travel to start
 G1 Z{z_down} F{feed_rate_z} ; Pen down
 \"\"\"
 
-segment = \"\"\"G1 X{{x:.4f}} Y{{y:.4f}} F{feed_rate_draw} ; Draw
+segment = \"\"\"G1 X{{x:.8f}} Y{{y:.8f}} F{feed_rate_draw} ; Draw
 \"\"\"
 
-line_end = \"\"\"G1 Z{z_up} F{feed_rate_z} ; Pen up
-\"\"\"
+line_end = "; --- End Line {{lines_index}} ---\\n"
+layer_end = "; --- End Layer {{layer_index}} ---\\n"
 
-document_end = \"\"\"G1 Z{z_up} F{feed_rate_z} ; Pen up
+document_end = \"\"\"G1 Z{z_up_long} F{feed_rate_z} ; Pen up
 G0 X0.0000 Y0.0000 F{feed_rate_travel} ; Return to home
-G1 Z{z_up} F{feed_rate_z} ; Stay pen up
+G1 Z{z_up_long} F{feed_rate_z} ; Stay pen up
 M2 ; End of program
 \"\"\"
 """

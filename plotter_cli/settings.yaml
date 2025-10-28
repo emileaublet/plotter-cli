@@ -1,8 +1,10 @@
 general:
   area_height: 460
   area_width: 385
-  z_up: 8
-  z_down: 0
+  z_up_long: 12
+  z_up_short: 6
+  z_up_threshold: 1.5
+  z_down: -0.25
   feed_rate_draw: 4000 # Feed rate for drawing movements (mm/min)
   feed_rate_travel: 6000 # Feed rate for travel movements (mm/min)
   feed_rate_z: 1500 # Feed rate for Z-axis movements (mm/min)
@@ -25,6 +27,12 @@ papers:
   - height: 457.2
     name: 12x18
     width: 304.8
+  - name: 18x24
+    width: 457
+    height: 610
   - name: 8.5x11
     width: 215.9
     height: 279.4
+  - name: A3
+    width: 294
+    height: 420
