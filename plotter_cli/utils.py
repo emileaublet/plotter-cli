@@ -372,6 +372,63 @@ def format_distance(mm: float) -> str:
         return f"{mm:.0f}mm"
 
 
+def format_time(minutes: float) -> str:
+    """Format time in minutes to human-readable format."""
+    if minutes < 1:
+        return f"{int(minutes * 60)}s"
+    elif minutes < 60:
+        mins = int(minutes)
+        secs = int((minutes - mins) * 60)
+        if secs > 0:
+            return f"{mins}m {secs}s"
+        return f"{mins}m"
+    else:
+        hours = int(minutes // 60)
+        mins = int(minutes % 60)
+        if mins > 0:
+            return f"{hours}h {mins}m"
+        return f"{hours}h"
+
+
+def estimate_draw_time(
+    draw_distance_mm: float,
+    travel_distance_mm: float,
+    pen_lifts: int,
+    feed_rate_draw: float = 4000,
+    feed_rate_travel: float = 6000,
+    feed_rate_z: float = 1500,
+    z_up: float = 12,
+    z_down: float = 0,
+) -> float:
+    """
+    Estimate the time to draw in minutes.
+
+    Parameters:
+        draw_distance_mm: Total drawing distance in mm
+        travel_distance_mm: Total travel distance in mm
+        pen_lifts: Number of pen up/down cycles
+        feed_rate_draw: Drawing feed rate in mm/min
+        feed_rate_travel: Travel feed rate in mm/min
+        feed_rate_z: Z-axis feed rate in mm/min
+        z_up: Z height when pen is up in mm
+        z_down: Z height when pen is down in mm
+
+    Returns:
+        Estimated time in minutes
+    """
+    # Time for drawing movements
+    draw_time = draw_distance_mm / feed_rate_draw
+
+    # Time for travel movements
+    travel_time = travel_distance_mm / feed_rate_travel
+
+    # Time for Z movements (up and down for each pen lift)
+    z_distance_per_lift = abs(z_up - z_down) * 2  # up + down
+    z_time = (pen_lifts * z_distance_per_lift) / feed_rate_z
+
+    return draw_time + travel_time + z_time
+
+
 def hex_to_rich_color(hex_code: str) -> str:
     """
     Convert a hex color code to a Rich-compatible color string.

@@ -12,6 +12,8 @@ from .utils import (
     rename_gcode_with_color_name,
     calculate_gcode_stats,
     format_distance,
+    format_time,
+    estimate_draw_time,
     hex_to_rich_color,
 )
 from .gcode_parser import GCodeParser
@@ -395,6 +397,13 @@ def process(
                 f"[dim]{z_up_short}mm (short) / {z_up_long}mm (long, >{z_up_threshold}mm)[/dim]"
             )
 
+        # Get feed rates for time estimation
+        feed_rate_draw = settings["general"].get("feed_rate_draw", 4000)
+        feed_rate_travel = settings["general"].get("feed_rate_travel", 6000)
+        feed_rate_z = settings["general"].get("feed_rate_z", 1500)
+        z_up = settings["general"].get("z_up_long", 12)
+        z_down = settings["general"].get("z_down", 0)
+
         # Calculate stats for all gcode files
         final_files = sorted(
             [f for f in os.listdir(output_folder) if f.endswith(".gcode")]
@@ -403,14 +412,39 @@ def process(
         total_draw = 0.0
         total_travel = 0.0
         total_segments = 0
+        total_pen_lifts = 0
 
         for f in final_files:
             stats = calculate_gcode_stats(os.path.join(output_folder, f))
             stats["filename"] = f
+            # Calculate time for this file
+            stats["time_minutes"] = estimate_draw_time(
+                stats["draw_distance_mm"],
+                stats["travel_distance_mm"],
+                stats["num_pen_lifts"],
+                feed_rate_draw,
+                feed_rate_travel,
+                feed_rate_z,
+                z_up,
+                z_down,
+            )
             all_stats.append(stats)
             total_draw += stats["draw_distance_mm"]
             total_travel += stats["travel_distance_mm"]
             total_segments += stats["num_segments"]
+            total_pen_lifts += stats["num_pen_lifts"]
+
+        # Calculate total time
+        total_time = estimate_draw_time(
+            total_draw,
+            total_travel,
+            total_pen_lifts,
+            feed_rate_draw,
+            feed_rate_travel,
+            feed_rate_z,
+            z_up,
+            z_down,
+        )
 
         # Create a rich table for the output
         console.print()
@@ -424,6 +458,8 @@ def process(
         table.add_column("Color", style="bold")
         table.add_column("Draw", justify="right")
         table.add_column("Travel", justify="right", style="dim")
+        table.add_column("Total", justify="right")
+        table.add_column("Time", justify="right")
         table.add_column("Segments", justify="right", style="dim")
         table.add_column("File", style="dim")
 
@@ -438,20 +474,27 @@ def process(
             else:
                 color_display = color_name
 
+            total_distance = stats["draw_distance_mm"] + stats["travel_distance_mm"]
+
             table.add_row(
                 color_display,
                 format_distance(stats["draw_distance_mm"]),
                 format_distance(stats["travel_distance_mm"]),
+                format_distance(total_distance),
+                format_time(stats["time_minutes"]),
                 str(stats["num_segments"]),
                 stats["filename"],
             )
 
         # Add totals row
         table.add_section()
+        total_distance_all = total_draw + total_travel
         table.add_row(
             "[bold]Total[/bold]",
             f"[bold]{format_distance(total_draw)}[/bold]",
             format_distance(total_travel),
+            f"[bold]{format_distance(total_distance_all)}[/bold]",
+            f"[bold]{format_time(total_time)}[/bold]",
             str(total_segments),
             "",
         )
