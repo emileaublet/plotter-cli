@@ -9,10 +9,15 @@ from .utils import (
     get_svg_dimensions,
     generate_boundary_gcode,
     update_vpype_config_with_z_settings,
+    rename_gcode_with_color_name,
+    calculate_gcode_stats,
+    format_distance,
+    hex_to_rich_color,
 )
 from .gcode_parser import GCodeParser
 from rich.console import Console
 from rich.panel import Panel
+from rich.table import Table
 from rich.progress import (
     Progress,
     SpinnerColumn,
@@ -303,7 +308,7 @@ def process(
             # f"layout {area_width}{unit}x{area_height}{unit} "
             f"forlayer "
             f"lmove all 999 "
-            f"linemerge linesort --two-opt --passes 2000 "
+            f"linemerge linesort --no-flip "
             f"rect {registration_marks_length}mm {registration_marks_length}mm {registration_marks_length}mm {registration_marks_length}mm "
             f"rect {area_width - 2 * registration_marks_length}mm {registration_marks_length}mm {registration_marks_length}mm {registration_marks_length}mm "
             f"rect {registration_marks_length}mm {area_height - 2 * registration_marks_length}mm {registration_marks_length}mm {registration_marks_length}mm "
@@ -318,23 +323,31 @@ def process(
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            TaskProgressColumn(),
             console=console,
         ) as progress:
             task = progress.add_task("[cyan]Processing SVG with vpype...", total=None)
-            subprocess.run(vpype_command, shell=True, check=True)
+            subprocess.run(vpype_command, shell=True, check=True, capture_output=True)
             progress.update(task, completed=True)
+
+        console.print("[green]✓[/green] SVG processed with vpype")
 
         # Post-process all generated G-code files with dynamic Z adjustment
         generated_files = os.listdir(output_folder)
         gcode_files = [f for f in generated_files if f.endswith(".gcode")]
 
+        # Rename gcode files to include color names based on hex codes
         if gcode_files:
+            renamed_files = []
+            for gcode_file in gcode_files:
+                file_path = os.path.join(output_folder, gcode_file)
+                new_filename = rename_gcode_with_color_name(file_path)
+                renamed_files.append(new_filename)
+            gcode_files = renamed_files
             console.print(
-                "\n[bold cyan]Post-processing G-code files with dynamic Z adjustment...[/bold cyan]"
+                f"[green]✓[/green] Renamed {len(gcode_files)} file(s) with color names"
             )
 
+        if gcode_files:
             # Get Z settings from the settings file
             z_up_long = settings["general"].get("z_up_long", 10.0)
             z_up_short = settings["general"].get("z_up_short", 4.0)
@@ -354,10 +367,11 @@ def process(
                 BarColumn(),
                 TaskProgressColumn(),
                 console=console,
+                transient=True,
             ) as progress:
                 total_files = len(gcode_files)
                 task = progress.add_task(
-                    f"[green]Processing {total_files} G-code file(s)...",
+                    f"[cyan]Optimizing Z heights...",
                     total=total_files,
                 )
 
@@ -365,7 +379,7 @@ def process(
                     file_path = Path(output_folder) / gcode_file
                     progress.update(
                         task,
-                        description=f"[green]Processing [{idx}/{total_files}] {gcode_file}...",
+                        description=f"[cyan]Optimizing Z heights [{idx}/{total_files}]...",
                     )
                     try:
                         parser.parse_file(file_path)
@@ -376,23 +390,75 @@ def process(
                         )
                         progress.advance(task)
 
-            console.print(f"\n[bold green]Post-processing complete![/bold green]")
             console.print(
-                f"  • Long distance Z: {z_up_long}mm (for travels > {z_up_threshold}mm)"
-            )
-            console.print(
-                f"  • Short distance Z: {z_up_short}mm (for travels ≤ {z_up_threshold}mm)"
+                f"[green]✓[/green] Optimized Z heights: "
+                f"[dim]{z_up_short}mm (short) / {z_up_long}mm (long, >{z_up_threshold}mm)[/dim]"
             )
 
-        # List all generated files in the output folder
-        file_list = "\n".join([f"- {file}" for file in generated_files])
-
-        console.print(
-            Panel(
-                f"[SUCCESS] Files processed and saved to: \n{file_list}",
-                style="bold green",
-            )
+        # Calculate stats for all gcode files
+        final_files = sorted(
+            [f for f in os.listdir(output_folder) if f.endswith(".gcode")]
         )
+        all_stats = []
+        total_draw = 0.0
+        total_travel = 0.0
+        total_segments = 0
+
+        for f in final_files:
+            stats = calculate_gcode_stats(os.path.join(output_folder, f))
+            stats["filename"] = f
+            all_stats.append(stats)
+            total_draw += stats["draw_distance_mm"]
+            total_travel += stats["travel_distance_mm"]
+            total_segments += stats["num_segments"]
+
+        # Create a rich table for the output
+        console.print()
+        table = Table(
+            title=f"[bold]📊 {len(final_files)} file(s) ready[/bold]",
+            show_header=True,
+            header_style="bold",
+            border_style="dim",
+            title_justify="left",
+        )
+        table.add_column("Color", style="bold")
+        table.add_column("Draw", justify="right")
+        table.add_column("Travel", justify="right", style="dim")
+        table.add_column("Segments", justify="right", style="dim")
+        table.add_column("File", style="dim")
+
+        for stats in all_stats:
+            color_name = stats["color_name"] or "unknown"
+            hex_code = stats["hex_code"]
+
+            # Style the color name with actual color if available
+            if hex_code:
+                rich_color = hex_to_rich_color(hex_code)
+                color_display = f"[{rich_color}]●[/{rich_color}] {color_name}"
+            else:
+                color_display = color_name
+
+            table.add_row(
+                color_display,
+                format_distance(stats["draw_distance_mm"]),
+                format_distance(stats["travel_distance_mm"]),
+                str(stats["num_segments"]),
+                stats["filename"],
+            )
+
+        # Add totals row
+        table.add_section()
+        table.add_row(
+            "[bold]Total[/bold]",
+            f"[bold]{format_distance(total_draw)}[/bold]",
+            format_distance(total_travel),
+            str(total_segments),
+            "",
+        )
+
+        console.print(table)
+        console.print(f"\n[dim]📁 {output_folder}[/dim]")
+
     except subprocess.CalledProcessError as e:
         console.print(
             Panel(f"[ERROR] Failed to execute vpype command: {e}", style="bold red")

@@ -23,9 +23,9 @@ class GCodeParser:
         Initialize the parser.
 
         Args:
-            long_distance_z: Z height for long travels (default: 8.0mm)
+            long_distance_z: Z height for long travels (default: 10.0mm)
             short_distance_z: Z height for short travels (default: 4.0mm)
-            short_distance_mm: Distance threshold in mm to determine short vs long travel (default: 10.0mm)
+            short_distance_mm: Distance threshold in mm to determine short vs long travel (default: 1.5mm)
         """
         self.long_distance_z = long_distance_z
         self.short_distance_z = short_distance_z
@@ -227,10 +227,14 @@ class GCodeParser:
 
                     travel_comment = f"; Will travel {distance:.2f}mm (Z={z_height})\n"
 
-                    # Add lines up to the pen up command
+                    # Collect lines up to the pen up command
+                    lines_to_add = []
                     while i < pen_up_index:
-                        processed_lines.append(lines[i])
+                        lines_to_add.append(lines[i])
                         i += 1
+
+                    # Add the collected lines
+                    processed_lines.extend(lines_to_add)
 
                     # Add the travel distance comment before the pen up command
                     processed_lines.append(travel_comment)
@@ -257,8 +261,6 @@ class GCodeParser:
         # Write back to the same file
         with open(input_file, "w", encoding="utf-8") as outfile:
             outfile.writelines(processed_lines)
-
-        print(f"Added travel distance comments to: {input_file}")
 
 
 def main():

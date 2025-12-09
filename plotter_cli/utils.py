@@ -145,3 +145,242 @@ M2 ; End of program
         temp_file.write(config_content)
 
     return temp_path
+
+
+def hex_to_color_name(hex_color: str) -> str:
+    """
+    Convert a hex color code to a human-readable color name.
+    Ignores the alpha channel (last 2 digits of 8-char hex codes).
+
+    Parameters:
+        hex_color (str): Hex color code (e.g., "#FF0000" or "FF000000" with alpha)
+
+    Returns:
+        str: Human-readable color name (e.g., "red", "blue", "dark_green")
+    """
+    import math
+
+    # Remove '#' if present
+    hex_color = hex_color.lstrip("#")
+
+    # If 8 characters (with alpha), ignore the last 2 digits (alpha channel)
+    if len(hex_color) == 8:
+        hex_color = hex_color[:6]
+
+    # Parse RGB values
+    try:
+        r = int(hex_color[0:2], 16)
+        g = int(hex_color[2:4], 16)
+        b = int(hex_color[4:6], 16)
+    except (ValueError, IndexError):
+        return "unknown"
+
+    # Extended color mapping with RGB values - using common, clear names
+    color_map = {
+        # Basic colors
+        "black": (0, 0, 0),
+        "white": (255, 255, 255),
+        "red": (255, 0, 0),
+        "green": (0, 128, 0),
+        "blue": (0, 0, 255),
+        "yellow": (255, 255, 0),
+        "cyan": (0, 255, 255),
+        "magenta": (255, 0, 255),
+        "orange": (255, 165, 0),
+        "pink": (255, 192, 203),
+        "purple": (128, 0, 128),
+        "brown": (139, 69, 19),
+        # Grays
+        "gray": (128, 128, 128),
+        "light_gray": (192, 192, 192),
+        "dark_gray": (64, 64, 64),
+        # Dark variants
+        "dark_red": (139, 0, 0),
+        "dark_green": (0, 100, 0),
+        "dark_blue": (0, 0, 139),
+        "dark_orange": (255, 140, 0),
+        "dark_yellow": (204, 204, 0),
+        "dark_pink": (231, 84, 128),
+        "dark_purple": (48, 0, 48),
+        "dark_brown": (101, 67, 33),
+        "dark_cyan": (0, 139, 139),
+        # Light variants
+        "light_red": (255, 102, 102),
+        "light_green": (144, 238, 144),
+        "light_blue": (173, 216, 230),
+        "light_orange": (255, 200, 150),
+        "light_yellow": (255, 255, 200),
+        "light_pink": (255, 182, 193),
+        "light_purple": (200, 162, 200),
+        "light_brown": (181, 137, 99),
+        "light_cyan": (180, 255, 255),
+        # Other common colors
+        "navy": (0, 0, 128),
+        "teal": (0, 128, 128),
+        "olive": (128, 128, 0),
+        "lime": (0, 255, 0),
+        "beige": (245, 245, 220),
+    }
+
+    # Find the closest color by Euclidean distance
+    min_distance = float("inf")
+    closest_color = "unknown"
+
+    for color_name, (cr, cg, cb) in color_map.items():
+        distance = math.sqrt((r - cr) ** 2 + (g - cg) ** 2 + (b - cb) ** 2)
+        if distance < min_distance:
+            min_distance = distance
+            closest_color = color_name
+
+    return closest_color
+
+
+def rename_gcode_with_color_name(file_path: str) -> str:
+    """
+    Rename a gcode file to include a color name based on its hex color code.
+    Expects filenames like: my_file#FF0000FF.gcode
+    Returns new filename like: my_file#FF0000FF_red.gcode
+
+    Parameters:
+        file_path (str): Path to the gcode file
+
+    Returns:
+        str: New filename (just the name, not the full path)
+    """
+    import os
+    import re
+
+    dirname = os.path.dirname(file_path)
+    filename = os.path.basename(file_path)
+
+    # Match pattern: anything#XXXXXXXX.gcode (8 hex chars before extension)
+    pattern = r"^(.+)#([0-9A-Fa-f]{8})(\.gcode)$"
+    match = re.match(pattern, filename)
+
+    if not match:
+        # Try 6 char hex code pattern as fallback
+        pattern_6 = r"^(.+)#([0-9A-Fa-f]{6})(\.gcode)$"
+        match = re.match(pattern_6, filename)
+
+    if match:
+        base_name = match.group(1)
+        hex_code = match.group(2)
+        extension = match.group(3)
+
+        color_name = hex_to_color_name(hex_code)
+        new_filename = f"{base_name}#{hex_code}_{color_name}{extension}"
+
+        old_path = file_path
+        new_path = os.path.join(dirname, new_filename)
+
+        if old_path != new_path and os.path.exists(old_path):
+            os.rename(old_path, new_path)
+
+        return new_filename
+
+    return filename
+
+
+def calculate_gcode_stats(file_path: str) -> dict:
+    """
+    Calculate statistics from a gcode file.
+
+    Parameters:
+        file_path (str): Path to the gcode file
+
+    Returns:
+        dict: Statistics including draw_distance_mm, travel_distance_mm,
+              num_pen_lifts, color_name, hex_code
+    """
+    import re
+    import math
+    import os
+
+    stats = {
+        "draw_distance_mm": 0.0,
+        "travel_distance_mm": 0.0,
+        "num_pen_lifts": 0,
+        "num_segments": 0,
+        "color_name": None,
+        "hex_code": None,
+    }
+
+    # Extract color info from filename
+    filename = os.path.basename(file_path)
+    color_match = re.search(r"#([0-9A-Fa-f]{6,8})_(\w+)\.gcode$", filename)
+    if color_match:
+        stats["hex_code"] = color_match.group(1)[:6]  # Just RGB, no alpha
+        stats["color_name"] = color_match.group(2)
+
+    current_x = 0.0
+    current_y = 0.0
+    is_drawing = False  # Track if pen is down
+
+    try:
+        with open(file_path, "r") as f:
+            for line in f:
+                line = line.strip().upper()
+
+                # Check for pen down (Z goes negative or to 0)
+                if line.startswith("G1") and "Z" in line:
+                    z_match = re.search(r"Z([-+]?\d*\.?\d+)", line)
+                    if z_match:
+                        z_val = float(z_match.group(1))
+                        if z_val <= 0:
+                            is_drawing = True
+                        else:
+                            if is_drawing:
+                                stats["num_pen_lifts"] += 1
+                            is_drawing = False
+
+                # Parse X/Y movements
+                if line.startswith("G0") or line.startswith("G1"):
+                    x_match = re.search(r"X([-+]?\d*\.?\d+)", line)
+                    y_match = re.search(r"Y([-+]?\d*\.?\d+)", line)
+
+                    new_x = float(x_match.group(1)) if x_match else current_x
+                    new_y = float(y_match.group(1)) if y_match else current_y
+
+                    # Calculate distance
+                    distance = math.sqrt(
+                        (new_x - current_x) ** 2 + (new_y - current_y) ** 2
+                    )
+
+                    if line.startswith("G1") and is_drawing and (x_match or y_match):
+                        stats["draw_distance_mm"] += distance
+                    elif line.startswith("G0"):
+                        stats["travel_distance_mm"] += distance
+
+                    current_x = new_x
+                    current_y = new_y
+
+                # Count segments
+                if "; --- Start Line" in line.upper() or "; --- START LINE" in line:
+                    stats["num_segments"] += 1
+
+    except Exception:
+        pass
+
+    return stats
+
+
+def format_distance(mm: float) -> str:
+    """Format distance in mm to human-readable format."""
+    if mm >= 1000:
+        return f"{mm / 1000:.2f}m"
+    else:
+        return f"{mm:.0f}mm"
+
+
+def hex_to_rich_color(hex_code: str) -> str:
+    """
+    Convert a hex color code to a Rich-compatible color string.
+
+    Parameters:
+        hex_code (str): 6 or 8 character hex code (alpha ignored)
+
+    Returns:
+        str: Rich color code (e.g., "#FF0000")
+    """
+    hex_code = hex_code.lstrip("#")[:6]
+    return f"#{hex_code}"
