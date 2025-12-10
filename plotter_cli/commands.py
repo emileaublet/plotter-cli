@@ -94,10 +94,15 @@ def check_svg(
     conversion_factor = 25.4 if imperial else 1
     unit = "in" if imperial else "mm"
 
+    # 3% tolerance for ratio matching
+    ratio_tolerance = 0.03
+
     matching_papers = []
     for paper in settings["papers"]:
         paper_ratio = paper["width"] / paper["height"]
-        if abs(svg_ratio - paper_ratio) < 1e-6:  # Allow for floating-point precision
+        # Use relative difference for flexible matching
+        relative_diff = abs(svg_ratio - paper_ratio) / max(svg_ratio, paper_ratio)
+        if relative_diff < ratio_tolerance:
             matching_papers.append(paper)
 
     if matching_papers:
@@ -204,10 +209,15 @@ def process(
     conversion_factor = 25.4 if imperial else 1
     unit = "in" if imperial else "mm"
 
+    # 3% tolerance for ratio matching
+    ratio_tolerance = 0.03
+
     matching_papers = []
     for paper in settings["papers"]:
         paper_ratio = paper["width"] / paper["height"]
-        if abs(svg_ratio - paper_ratio) < 1e-6:
+        # Use relative difference for flexible matching
+        relative_diff = abs(svg_ratio - paper_ratio) / max(svg_ratio, paper_ratio)
+        if relative_diff < ratio_tolerance:
             matching_papers.append(paper)
 
     if matching_papers:
