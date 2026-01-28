@@ -18,6 +18,9 @@ class GCodeParser:
         long_distance_z: float = 10.0,
         short_distance_z: float = 4.0,
         short_distance_mm: float = 1.5,
+        z_down: float = 0.0,
+        feed_rate_draw: int = 4000,
+        feed_rate_z: int = 1500,
     ):
         """
         Initialize the parser.
@@ -26,10 +29,16 @@ class GCodeParser:
             long_distance_z: Z height for long travels (default: 10.0mm)
             short_distance_z: Z height for short travels (default: 4.0mm)
             short_distance_mm: Distance threshold in mm to determine short vs long travel (default: 1.5mm)
+            z_down: Z height when pen is down (default: 0.0mm)
+            feed_rate_draw: Feed rate for drawing movements (default: 4000 mm/min)
+            feed_rate_z: Feed rate for Z-axis movements (default: 1500 mm/min)
         """
         self.long_distance_z = long_distance_z
         self.short_distance_z = short_distance_z
         self.short_distance_mm = short_distance_mm
+        self.z_down = z_down
+        self.feed_rate_draw = feed_rate_draw
+        self.feed_rate_z = feed_rate_z
 
     def parse_start_line_comment(self, line: str) -> Optional[Tuple[float, float]]:
         """
@@ -172,7 +181,7 @@ class GCodeParser:
 
     def parse_file(self, input_file: Path) -> None:
         """
-        Parse a G-code file and add travel distance comments.
+        Parse a G-code file and optimize Z heights based on travel distance.
 
         Args:
             input_file: Input G-code file path to modify
@@ -184,6 +193,30 @@ class GCodeParser:
         with open(input_file, "r", encoding="utf-8") as infile:
             lines = infile.readlines()
 
+        # Optimize Z heights based on travel distance
+        processed_lines = self._optimize_z_heights(lines)
+
+        # Remove the boundary squares between layer 0 markers
+        processed_lines = self.remove_code_between_markers(
+            processed_lines,
+            start_marker="; --- Start Layer 0 ---",
+            end_marker="; --- End Layer 0 ---",
+        )
+
+        # Write back to the same file
+        with open(input_file, "w", encoding="utf-8") as outfile:
+            outfile.writelines(processed_lines)
+
+    def _optimize_z_heights(self, lines: list[str]) -> list[str]:
+        """
+        Optimize Z heights based on travel distance between paths.
+
+        Args:
+            lines: List of G-code lines
+
+        Returns:
+            Modified list with optimized Z heights
+        """
         processed_lines = []
         i = 0
 
@@ -221,16 +254,18 @@ class GCodeParser:
                     j += 1
 
                 # If we found both start position and travel destination
-                if travel_pos is not None:
+                if travel_pos is not None and pen_up_index is not None:
                     distance = self.calculate_distance(start_pos, travel_pos)
                     z_height = self.get_z_height_for_distance(distance)
 
                     travel_comment = f"; Will travel {distance:.2f}mm (Z={z_height})\n"
 
-                    # Collect lines up to the pen up command
+                    # Collect lines up to the pen up command, filtering out any existing travel comments
                     lines_to_add = []
                     while i < pen_up_index:
-                        lines_to_add.append(lines[i])
+                        # Skip any existing travel distance comments to avoid duplicates
+                        if not lines[i].strip().startswith("; Will travel"):
+                            lines_to_add.append(lines[i])
                         i += 1
 
                     # Add the collected lines
@@ -244,23 +279,15 @@ class GCodeParser:
                     processed_lines.append(modified_pen_up)
                     i += 1
                 else:
-                    # No travel command found, just continue normally
-                    continue
+                    # No travel command found, continue processing remaining lines normally
+                    # The Start Line comment was already added, just continue
+                    pass
             else:
                 # Normal line, just add it
                 processed_lines.append(current_line)
                 i += 1
 
-        # Remove the boundary squares between layer 0 markers
-        processed_lines = self.remove_code_between_markers(
-            processed_lines,
-            start_marker="; --- Start Layer 0 ---",
-            end_marker="; --- End Layer 0 ---",
-        )
-
-        # Write back to the same file
-        with open(input_file, "w", encoding="utf-8") as outfile:
-            outfile.writelines(processed_lines)
+        return processed_lines
 
 
 def main():

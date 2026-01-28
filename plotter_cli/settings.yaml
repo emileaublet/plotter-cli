@@ -1,13 +1,14 @@
 general:
-  area_height: 460
-  area_width: 385
+  area_height: 470
+  area_width: 880
   z_up_long: 12
   z_up_short: 6
   z_up_threshold: 1.5
   z_down: -0.25
-  feed_rate_draw: 4000 # Feed rate for drawing movements (mm/min)
-  feed_rate_travel: 6000 # Feed rate for travel movements (mm/min)
-  feed_rate_z: 1500 # Feed rate for Z-axis movements (mm/min)
+  feed_rate_draw: 8000 # Feed rate for drawing movements (mm/min)
+  feed_rate_travel: 8000 # Feed rate for travel movements (mm/min)
+  feed_rate_z: 2400 # Feed rate for Z-axis movements (mm/min)
+  registration_marks_length: 4
 papers:
   - height: 304.79999999999995
     name: 9x12

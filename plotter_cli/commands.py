@@ -194,6 +194,11 @@ def process(
     imperial: bool = typer.Option(
         False, "--imperial", "-i", help="Use imperial units (in) instead of metric (mm)"
     ),
+    no_flip: bool = typer.Option(
+        False,
+        "--no-flip",
+        help="Disable path flipping during line sorting (faster but may increase travel)",
+    ),
 ):
     """Process an SVG file for plotting."""
     # Validate file extension
@@ -296,8 +301,8 @@ def process(
     feed_rate_draw = settings["general"].get("feed_rate_draw", 3000)
     feed_rate_travel = settings["general"].get("feed_rate_travel", 6000)
     feed_rate_z = settings["general"].get("feed_rate_z", 1500)
-    area_max_x = settings["general"].get("area_width", 385)
-    area_max_y = settings["general"].get("area_height", 460)
+    area_max_x = settings["general"].get("area_width", 880)
+    area_max_y = settings["general"].get("area_height", 470)
     registration_marks_length = settings["general"].get("registration_marks_length", 4)
     temp_config_path = update_vpype_config_with_z_settings(
         z_up_long=z_up,
@@ -313,14 +318,13 @@ def process(
         vpype_command = (
             f"vpype -c {temp_config_path} "
             f"read --attr stroke {svg_file} "
-            f"rect -l 998 0 0 {svg_width} {svg_height} "
-            # f"scaleto {custom_width}{unit} {custom_height}{unit} layout {area_width}{unit}x{area_height}{unit} "
-            f"scaleto {custom_width}{unit} {custom_height}{unit} layout {area_width}{unit}x{area_height}{unit} "
+            f"rect -l 998 0 0 {svg_width}mm {svg_height}mm "
+            f"scaleto {custom_width}{unit} {custom_height}{unit} "
+            f"layout --landscape {area_width}mmx{area_height}mm "
             f"ldelete 998 "
-            # f"layout {area_width}{unit}x{area_height}{unit} "
             f"forlayer "
             f"lmove all 999 "
-            f"linemerge linesort --no-flip "
+            f"linemerge linesort {'--no-flip' if no_flip else '--two-opt --passes 2000'} "
             f"rect {registration_marks_length}mm {registration_marks_length}mm {registration_marks_length}mm {registration_marks_length}mm "
             f"rect {area_width - 2 * registration_marks_length}mm {registration_marks_length}mm {registration_marks_length}mm {registration_marks_length}mm "
             f"rect {registration_marks_length}mm {area_height - 2 * registration_marks_length}mm {registration_marks_length}mm {registration_marks_length}mm "
@@ -364,12 +368,18 @@ def process(
             z_up_long = settings["general"].get("z_up_long", 10.0)
             z_up_short = settings["general"].get("z_up_short", 4.0)
             z_up_threshold = settings["general"].get("z_up_threshold", 1.5)
+            z_down = settings["general"].get("z_down", 0.0)
+            feed_rate_draw = settings["general"].get("feed_rate_draw", 4000)
+            feed_rate_z = settings["general"].get("feed_rate_z", 1500)
 
             # Initialize the G-code parser with settings values
             parser = GCodeParser(
                 long_distance_z=z_up_long,
                 short_distance_z=z_up_short,
                 short_distance_mm=z_up_threshold,
+                z_down=z_down,
+                feed_rate_draw=feed_rate_draw,
+                feed_rate_z=feed_rate_z,
             )
 
             # Process each G-code file with progress bar
@@ -383,7 +393,7 @@ def process(
             ) as progress:
                 total_files = len(gcode_files)
                 task = progress.add_task(
-                    f"[cyan]Optimizing Z heights...",
+                    f"[cyan]Optimizing G-code...",
                     total=total_files,
                 )
 
@@ -391,7 +401,7 @@ def process(
                     file_path = Path(output_folder) / gcode_file
                     progress.update(
                         task,
-                        description=f"[cyan]Optimizing Z heights [{idx}/{total_files}]...",
+                        description=f"[cyan]Optimizing G-code [{idx}/{total_files}]...",
                     )
                     try:
                         parser.parse_file(file_path)
@@ -402,9 +412,10 @@ def process(
                         )
                         progress.advance(task)
 
+            # Show optimization summary
             console.print(
-                f"[green]✓[/green] Optimized Z heights: "
-                f"[dim]{z_up_short}mm (short) / {z_up_long}mm (long, >{z_up_threshold}mm)[/dim]"
+                f"[green]✓[/green] Optimized G-code: "
+                f"[dim]Z={z_up_short}/{z_up_long}mm[/dim]"
             )
 
         # Get feed rates for time estimation
@@ -672,7 +683,7 @@ def generate_boundary(
     try:
         vpype_command = (
             f"vpype -c {temp_config_path} rect 0 0 {paper_width}mm {paper_height}mm "
-            f"layout {area_width}mmx{area_height}mm linemerge linesort --two-opt --passes 2000 "
+            f"layout --landscape {area_width}mmx{area_height}mm linemerge linesort --two-opt --passes 2000 "
             f"gwrite -p penplotte {gcode_path}"
         )
 
@@ -813,7 +824,7 @@ def calibrate(
         vpype_command = (
             f"vpype -c {temp_config_path} "
             f"{rect_commands} "
-            f"layout {area_width}mmx{area_height}mm linemerge linesort --two-opt --passes 2000 "
+            f"layout --landscape {area_width}mmx{area_height}mm linemerge linesort --two-opt --passes 2000 "
             f"gwrite -p penplotte {gcode_path}"
         )
 

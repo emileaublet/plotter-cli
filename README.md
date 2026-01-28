@@ -1,54 +1,52 @@
 # Plotter CLI
 
-This project provides a set of utilities for managing SVG files and paper sizes using a command-line interface (CLI).
+This project provides a command-line interface (CLI) for processing SVG files for plotting, managing paper sizes, and generating calibration files. It wraps `vpype` to provide a machine-specific pipeline.
 
 ## Installation
 
-### Option 1: Development Installation (Recommended for development)
-Install in editable mode so changes to your code are immediately reflected:
+### Recommended: Editable Install (for Development)
+Since this tool relies on local configuration (like `settings.yaml`), it is best installed in a virtual environment in editable mode. This ensures changes to the code or settings are immediately reflected.
+
+1. Create and activate a virtual environment:
+   ```bash
+   python3 -m venv .venv
+   source .venv/bin/activate
+   ```
+
+2. Install the package in editable mode:
+   ```bash
+   pip install -e .
+   ```
+
+3. Run the plotter:
+   ```bash
+   plotter --help
+   ```
+
+### Global Install (pipx)
+If you want to use the tool globally without activating a virtual environment, `pipx` is recommended.
+
+**Fresh Install:**
 ```bash
-cd /path/to/plotter-cli
-pip install -e .
+pipx install .
 ```
 
-### Option 2: Standard Installation
-Install the package globally in your Python environment:
+**Apply Updates:**
+If you change the code or settings, you must force a reinstall to see changes:
 ```bash
-cd /path/to/plotter-cli
-pip install .
+pipx install . --force
 ```
 
-### Option 3: Install with Dependencies
-Install dependencies first, then the package:
-```bash
-cd /path/to/plotter-cli
-pip install -r requirements.txt
-pip install .
-```
+## Configuration
 
-### Option 4: Build and Install as Package
-Create distribution packages and install from wheel:
-```bash
-cd /path/to/plotter-cli
-python -m build
-pip install dist/plotter-1.0.0-py3-none-any.whl
-```
+The tool uses a `settings.yaml` file to define machine dimensions, feed rates, and paper sizes. It looks for this file in the following order:
+1. Current working directory (`./settings.yaml`)
+2. Package installation directory (`plotter_cli/settings.yaml`)
+3. Hardcoded defaults
 
-### Verification
-To verify the installation worked:
-```bash
-which plotter
-plotter --help
-```
-
-After installation, you can use the CLI globally from anywhere:
-```bash
-plotter list
-plotter check your_file.svg
-plotter process your_file.svg
-plotter generate-boundary -o ~/Desktop
-plotter calibrate -o ~/Desktop
-```
+### Default Machine Settings
+- **Area**: 880mm x 470mm
+- **Units**: Metric (mm)
 
 ## Usage
 
@@ -57,20 +55,34 @@ Run the CLI with the following command:
 plotter [OPTIONS] COMMAND [ARGS]
 ```
 
-### Commands
+### Key Commands
 
-- `list`: List available paper sizes.
-- `general`: Show general settings.
-- `check`: Check SVG dimensions against paper sizes.
-- `process`: Process an SVG file for plotting.
-- `manage-papers`: Add, edit, or remove paper sizes.
+- **`process`**: Prepare an SVG for plotting.
+  - usage: `plotter process my_drawing.svg`
+  - options:
+    - `--no-flip`: Disable path flipping optimization (useful for some pens/brushes).
+    - `--imperial` / `-i`: Use inches for output prompts.
+- **`check`**: Verify if an SVG fits within defined paper sizes.
+- **`list`**: List all configured paper sizes.
+- **`general`**: Show current machine settings (Area, Feed Rates).
+- **`generate-boundary`**: Create a G-code file to draw the boundary of a specific paper size (useful for framing).
+- **`calibrate`**: Generate a calibration pattern.
+- **`manage-papers`**: Interactive wizard to add/edit/remove paper presets.
 
-### Default Behavior
+### Example Workflow
 
-If no command is specified, the `check` command is executed by default. You can provide an SVG file using the `--file` or `-f` option:
-```bash
-plotter --file path/to/your/file.svg
-```
+1. **Check dimensions**:
+   ```bash
+   plotter check drawing.svg
+   ```
+2. **Process file** (Scaling, centering, and optimizing):
+   ```bash
+   plotter process drawing.svg
+   ```
+3. **Verify settings**:
+   ```bash
+   plotter general
+   ```
 
 ## Contributing
 

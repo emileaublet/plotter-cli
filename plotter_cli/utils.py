@@ -1,20 +1,104 @@
 import yaml
 import xml.etree.ElementTree as ET
 import importlib.resources
+import re
+import os
 
 
 # Load settings from the YAML file
 def load_settings():
-    with importlib.resources.open_text("plotter_cli", "settings.yaml") as file:
-        return yaml.safe_load(file)
+    # Try to load from current directory first
+    if os.path.exists("settings.yaml"):
+        with open("settings.yaml", "r") as file:
+            return yaml.safe_load(file)
+
+    # Try to load from the module directory (preferred for development/source access)
+    module_settings = os.path.join(os.path.dirname(__file__), "settings.yaml")
+    if os.path.exists(module_settings):
+        with open(module_settings, "r") as file:
+            return yaml.safe_load(file)
+
+    # Fallback to package resources
+    try:
+        with importlib.resources.open_text("plotter_cli", "settings.yaml") as file:
+            return yaml.safe_load(file)
+    except FileNotFoundError:
+        # If all else fails, return a default structure
+        return {
+            "general": {
+                "area_width": 880,
+                "area_height": 470,
+                "z_up_long": 12,
+                "z_up_short": 6,
+                "z_up_threshold": 1.5,
+                "z_down": -0.25,
+                "feed_rate_draw": 8000,
+                "feed_rate_travel": 8000,
+                "feed_rate_z": 2400,
+                "registration_marks_length": 4,
+            },
+            "papers": [],
+        }
+
+
+def parse_dimension(value):
+    """Parse an SVG dimension string into a float value in mm."""
+    if not value:
+        return 0.0
+    if isinstance(value, (int, float)):
+        return float(value)
+
+    # Match number and optional unit
+    match = re.match(r"^\s*([-+]?\d*\.?\d+)\s*([a-z%]*)\s*$", str(value), re.I)
+    if not match:
+        return 0.0
+
+    number = float(match.group(1))
+    unit = match.group(2).lower()
+
+    if unit == "mm":
+        return number
+    elif unit == "cm":
+        return number * 10
+    elif unit == "in":
+        return number * 25.4
+    elif unit == "pt":
+        return number * 25.4 / 72
+    elif unit == "pc":
+        return number * 25.4 / 6
+    elif unit == "px":
+        # Standard SVG pixel is 1/96 inch
+        return number * 25.4 / 96
+    else:
+        # Default to pixels (1/96 inch) if unit is unknown or missing
+        # This aligns with standard SVG behavior and vpype defaults
+        return number * 25.4 / 96
 
 
 # Extract width and height from an SVG file
 def get_svg_dimensions(svg_file):
     tree = ET.parse(svg_file)
     root = tree.getroot()
-    width = float(root.attrib.get("width", 0))
-    height = float(root.attrib.get("height", 0))
+
+    width_str = root.attrib.get("width")
+    height_str = root.attrib.get("height")
+    viewbox_str = root.attrib.get("viewBox")
+
+    width = parse_dimension(width_str)
+    height = parse_dimension(height_str)
+
+    # Fallback to viewBox if width or height are missing or zero
+    if (not width or not height) and viewbox_str:
+        parts = viewbox_str.split()
+        if len(parts) == 4:
+            # viewBox="min-x min-y width height"
+            vb_width = parse_dimension(parts[2])
+            vb_height = parse_dimension(parts[3])
+            if not width:
+                width = vb_width
+            if not height:
+                height = vb_height
+
     return width, height
 
 
@@ -83,8 +167,8 @@ def update_vpype_config_with_z_settings(
     feed_rate_draw=3000,
     feed_rate_travel=6000,
     feed_rate_z=1500,
-    area_max_x=385,
-    area_max_y=460,
+    area_max_x=880,
+    area_max_y=470,
 ):
     """
     Update the .vpype.toml configuration file with Z settings and feed rates from the YAML configuration.
