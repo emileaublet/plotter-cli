@@ -22,7 +22,10 @@ dependencies = [
     "typer",
     "questionary",
     "rich",
-    "pyyaml"
+    "pyyaml",
+    "flask",
+    "cairosvg",
+    "pillow"
 ]
 
 [project.scripts]

@@ -77,29 +77,54 @@ def parse_dimension(value):
 
 # Extract width and height from an SVG file
 def get_svg_dimensions(svg_file):
-    tree = ET.parse(svg_file)
-    root = tree.getroot()
+    try:
+        tree = ET.parse(svg_file)
+        root = tree.getroot()
 
-    width_str = root.attrib.get("width")
-    height_str = root.attrib.get("height")
-    viewbox_str = root.attrib.get("viewBox")
+        # Handle namespaces - strip them if present
+        # SVG root might be in a namespace like {http://www.w3.org/2000/svg}svg
+        width_str = root.attrib.get("width")
+        height_str = root.attrib.get("height")
+        viewbox_str = root.attrib.get("viewBox")
+        
+        # Also try with namespace
+        if not width_str or not height_str:
+            # Try common SVG namespace
+            ns = {"svg": "http://www.w3.org/2000/svg"}
+            if not width_str:
+                width_str = root.attrib.get("{http://www.w3.org/2000/svg}width")
+            if not height_str:
+                height_str = root.attrib.get("{http://www.w3.org/2000/svg}height")
+            if not viewbox_str:
+                viewbox_str = root.attrib.get("{http://www.w3.org/2000/svg}viewBox")
 
-    width = parse_dimension(width_str)
-    height = parse_dimension(height_str)
+        width = parse_dimension(width_str) if width_str else 0.0
+        height = parse_dimension(height_str) if height_str else 0.0
 
-    # Fallback to viewBox if width or height are missing or zero
-    if (not width or not height) and viewbox_str:
-        parts = viewbox_str.split()
-        if len(parts) == 4:
-            # viewBox="min-x min-y width height"
-            vb_width = parse_dimension(parts[2])
-            vb_height = parse_dimension(parts[3])
-            if not width:
-                width = vb_width
-            if not height:
-                height = vb_height
+        # Fallback to viewBox if width or height are missing or zero
+        if (not width or not height) and viewbox_str:
+            parts = viewbox_str.split()
+            if len(parts) == 4:
+                # viewBox="min-x min-y width height"
+                vb_width = parse_dimension(parts[2])
+                vb_height = parse_dimension(parts[3])
+                if not width or width == 0.0:
+                    width = vb_width
+                if not height or height == 0.0:
+                    height = vb_height
 
-    return width, height
+        # Final fallback - if still no dimensions, raise an error
+        if not width or width == 0.0 or not height or height == 0.0:
+            raise ValueError(
+                f"Could not determine SVG dimensions. "
+                f"Width: {width_str}, Height: {height_str}, ViewBox: {viewbox_str}"
+            )
+
+        return float(width), float(height)
+    except ET.ParseError as e:
+        raise ValueError(f"Failed to parse SVG file: {e}")
+    except Exception as e:
+        raise ValueError(f"Error getting SVG dimensions: {e}")
 
 
 def generate_boundary_gcode(

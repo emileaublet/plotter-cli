@@ -1,1 +1,4 @@
-include cli/settings.yaml
+include plotter_cli/settings.yaml
+include plotter_cli/.vpype.toml
+recursive-include plotter_cli/gui/templates *.html
+recursive-include plotter_cli/gui/static *.js *.css

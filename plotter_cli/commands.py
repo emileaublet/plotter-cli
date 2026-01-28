@@ -865,5 +865,23 @@ def calibrate(
             os.unlink(temp_config_path)
 
 
+@app.command("studio")
+def studio(
+    host: str = typer.Option(
+        "127.0.0.1", "--host", "-h", help="Host to bind the server to"
+    ),
+    port: int = typer.Option(
+        5000, "--port", "-p", help="Port to bind the server to"
+    ),
+    debug: bool = typer.Option(
+        False, "--debug", help="Enable debug mode"
+    ),
+):
+    """Launch the Plotter Studio GUI."""
+    from .gui_app import run_gui
+
+    run_gui(host=host, port=port, debug=debug)
+
+
 if __name__ == "__main__":
     app(prog_name="plotter")

@@ -24,7 +24,13 @@ setup(
     ],
     python_requires=">=3.6",
     package_data={
-        "plotter_cli": ["settings.yaml", ".vpype.toml"],
+        "plotter_cli": [
+            "settings.yaml",
+            ".vpype.toml",
+            "gui/templates/*.html",
+            "gui/static/*.js",
+            "gui/static/*.css",
+        ],
     },
     include_package_data=True,
 )

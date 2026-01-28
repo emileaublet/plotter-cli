@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Plotter Studio</title>
+    <link
+      rel="stylesheet"
+      href="{{ url_for('static', filename='style.css') }}?v={{ cache_bust }}"
+    />
+  </head>
+  <body>
+    <div class="app-container">
+      <!-- Header -->
+      <header class="header">
+        <h1>Plotter Studio</h1>
+        <div class="header-actions">
+          <button id="export-btn" class="btn btn-primary">
+            <span id="export-btn-text">Export</span>
+            <span
+              id="export-btn-spinner"
+              class="spinner"
+              style="display: none"
+            ></span>
+          </button>
+        </div>
+      </header>
+
+      <!-- Main Content -->
+      <div class="main-content">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+          <div class="sidebar-section">
+            <h2>Add Paper</h2>
+            <select id="add-paper-select" class="input-select">
+              <option value="">Select paper size...</option>
+            </select>
+            <button
+              id="add-paper-btn"
+              class="btn btn-secondary"
+              style="margin-top: 0.5rem"
+            >
+              Add Paper to Canvas
+            </button>
+          </div>
+
+          <div class="sidebar-section">
+            <h2>Papers on Canvas</h2>
+            <div id="paper-list" class="svg-list">
+              <p class="empty-state">No papers added yet</p>
+            </div>
+          </div>
+
+          <div
+            class="sidebar-section"
+            id="transform-panel"
+            style="display: none"
+          >
+            <h2>Paper Settings</h2>
+            <div class="transform-controls">
+              <div class="control-group">
+                <label>Paper Size</label>
+                <select id="paper-size-select" class="input-select">
+                  <option value="custom">Custom</option>
+                </select>
+              </div>
+              <div class="control-group">
+                <label>Assign SVG</label>
+                <select id="assign-svg-select" class="input-select">
+                  <option value="">None</option>
+                </select>
+              </div>
+              <div class="control-group">
+                <label>Position X (mm)</label>
+                <input
+                  type="number"
+                  id="transform-x"
+                  step="0.1"
+                  class="input-number"
+                />
+              </div>
+              <div class="control-group">
+                <label>Position Y (mm)</label>
+                <input
+                  type="number"
+                  id="transform-y"
+                  step="0.1"
+                  class="input-number"
+                />
+              </div>
+              <button id="clone-paper-btn" class="btn btn-secondary">
+                Clone Paper
+              </button>
+              <button
+                id="remove-paper-btn"
+                class="btn btn-danger"
+                style="margin-top: 0.5rem"
+              >
+                Remove Paper
+              </button>
+            </div>
+          </div>
+
+          <div class="sidebar-section">
+            <h2>SVG Library</h2>
+            <input
+              type="file"
+              id="file-input"
+              accept=".svg"
+              style="display: none"
+            />
+            <button id="add-svg-btn" class="btn btn-secondary">
+              Add SVG to Library
+            </button>
+            <div id="svg-library" class="svg-list" style="margin-top: 1rem">
+              <p class="empty-state">No SVGs in library</p>
+            </div>
+          </div>
+
+          <div class="sidebar-section">
+            <h2>Arrange</h2>
+            <button id="auto-arrange-btn" class="btn btn-secondary">
+              Auto-Arrange
+            </button>
+          </div>
+        </aside>
+
+        <!-- Canvas Area -->
+        <main class="canvas-area">
+          <div class="canvas-container">
+            <canvas id="canvas"></canvas>
+            <div id="canvas-overlay" class="canvas-overlay"></div>
+          </div>
+          <div class="canvas-info">
+            <span id="canvas-size"></span>
+            <span id="mouse-position"></span>
+          </div>
+        </main>
+      </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='app.js') }}?v={{ cache_bust }}"></script>
+  </body>
+</html>
