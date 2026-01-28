@@ -86,6 +86,13 @@ class PlotterStudio {
             this.assignSvgToPaper(e.target.value || null);
         });
 
+        document.getElementById('rotate-left-btn')?.addEventListener('click', () => {
+            this.rotateSelectedPaper(-90);
+        });
+        document.getElementById('rotate-right-btn')?.addEventListener('click', () => {
+            this.rotateSelectedPaper(90);
+        });
+
         document.getElementById('clone-paper-btn')?.addEventListener('click', () => this.cloneSelectedPaper());
         document.getElementById('remove-paper-btn')?.addEventListener('click', () => this.removeSelectedPaper());
         document.getElementById('auto-arrange-btn')?.addEventListener('click', () => this.autoArrange());
@@ -313,11 +320,69 @@ class PlotterStudio {
             } else {
                 paperSizeSelect.value = 'custom';
             }
+            paperSizeSelect.disabled = true;
+            paperSizeSelect.title = 'Paper size is fixed after creation.';
         }
 
         const assignSelect = document.getElementById('assign-svg-select');
         if (assignSelect) {
             assignSelect.value = paper.svg_id || '';
+        }
+    }
+
+    async rotateSelectedPaper(delta) {
+        if (!this.selectedPaperId) return;
+
+        const paper = this.papers.find((p) => p.id === this.selectedPaperId);
+        if (!paper) return;
+
+        const currentRotation = paper.rotation || 0;
+        const newRotation = (currentRotation + delta + 360) % 360;
+
+        const width = paper.paper_width || 0;
+        const height = paper.paper_height || 0;
+        const centerX = (paper.x || 0) + width / 2;
+        const centerY = (paper.y || 0) + height / 2;
+
+        let newWidth = width;
+        let newHeight = height;
+
+        if (Math.abs(delta) % 180 === 90) {
+            newWidth = height;
+            newHeight = width;
+        }
+
+        paper.paper_width = newWidth;
+        paper.paper_height = newHeight;
+        paper.x = centerX - newWidth / 2;
+        paper.y = centerY - newHeight / 2;
+        paper.rotation = newRotation;
+
+        this.render();
+        this.updateTransformPanel();
+
+        try {
+            const response = await fetch('/api/update-paper', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    id: paper.id,
+                    x: paper.x,
+                    y: paper.y,
+                    paper_width: paper.paper_width,
+                    paper_height: paper.paper_height,
+                    rotation: paper.rotation,
+                }),
+            });
+
+            if (response.ok) {
+                const result = await response.json();
+                Object.assign(paper, result.paper);
+                this.updateTransformPanel();
+                this.render();
+            }
+        } catch (error) {
+            console.error('Error rotating paper:', error);
         }
     }
 
@@ -446,11 +511,11 @@ class PlotterStudio {
 
             paper.paper_name = paperName;
             if (orientation === 'landscape') {
-                paper.paper_width = config.width;
-                paper.paper_height = config.height;
-            } else {
                 paper.paper_width = config.height;
                 paper.paper_height = config.width;
+            } else {
+                paper.paper_width = config.width;
+                paper.paper_height = config.height;
             }
         }
 
@@ -701,18 +766,26 @@ class PlotterStudio {
         const y = (paper.y || 0) * this.scale;
         const width = (paper.paper_width || 0) * this.scale;
         const height = (paper.paper_height || 0) * this.scale;
+        const rotation = (paper.rotation || 0) * (Math.PI / 180);
+
+        const centerX = x + width / 2;
+        const centerY = y + height / 2;
+
+        this.ctx.save();
+        this.ctx.translate(centerX, centerY);
+        this.ctx.rotate(rotation);
 
         this.ctx.strokeStyle = '#ffaa00';
         this.ctx.lineWidth = 2 / this.scale;
         this.ctx.setLineDash([10 / this.scale, 5 / this.scale]);
-        this.ctx.strokeRect(x, y, width, height);
+        this.ctx.strokeRect(-width / 2, -height / 2, width, height);
         this.ctx.setLineDash([]);
 
         if (paper.id === this.selectedPaperId) {
             this.ctx.strokeStyle = '#4a9eff';
             this.ctx.lineWidth = 2 / this.scale;
             this.ctx.setLineDash([5 / this.scale, 5 / this.scale]);
-            this.ctx.strokeRect(x, y, width, height);
+            this.ctx.strokeRect(-width / 2, -height / 2, width, height);
             this.ctx.setLineDash([]);
         }
 
@@ -722,12 +795,14 @@ class PlotterStudio {
                 const scale = paper.svg_scale || 1.0;
                 const scaledWidth = svg.width * scale * this.scale;
                 const scaledHeight = svg.height * scale * this.scale;
-                const svgX = x + (width - scaledWidth) / 2;
-                const svgY = y + (height - scaledHeight) / 2;
+                const svgX = -scaledWidth / 2;
+                const svgY = -scaledHeight / 2;
 
                 this.ctx.drawImage(svg.previewImage, svgX, svgY, scaledWidth, scaledHeight);
             }
         }
+
+        this.ctx.restore();
     }
 
     async export() {
@@ -736,7 +811,20 @@ class PlotterStudio {
             return;
         }
 
-        const outputFolder = prompt('Enter output folder path (or leave empty for temp folder):');
+        let outputFolder = null;
+        try {
+            const pickerResponse = await fetch('/api/select-output-folder', { method: 'POST' });
+            if (pickerResponse.ok) {
+                const pickerResult = await pickerResponse.json();
+                outputFolder = pickerResult.output_folder || null;
+            }
+        } catch (error) {
+            // Ignore picker errors and fall back to prompt
+        }
+
+        if (!outputFolder) {
+            outputFolder = prompt('Enter output folder path (or leave empty for temp folder):');
+        }
 
         try {
             const response = await fetch('/api/export', {

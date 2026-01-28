@@ -6,7 +6,11 @@ Provides a web-based interface for arranging multiple SVGs on a canvas.
 import os
 import time
 import json
+import platform
+import subprocess
 import tempfile
+import platform
+import subprocess
 import uuid
 from pathlib import Path
 from flask import Flask, render_template, request, jsonify, send_file
@@ -218,11 +222,11 @@ def add_paper():
             return jsonify({"error": "Paper not found"}), 404
 
         if orientation == "landscape":
-            paper_width = paper["width"]
-            paper_height = paper["height"]
-        else:
             paper_width = paper["height"]
             paper_height = paper["width"]
+        else:
+            paper_width = paper["width"]
+            paper_height = paper["height"]
 
     paper_id = str(uuid.uuid4())
     paper_store[paper_id] = {
@@ -233,6 +237,7 @@ def add_paper():
         "svg_id": None,  # SVG assigned to this paper
         "x": 0,
         "y": 0,
+        "rotation": 0,
     }
 
     return jsonify(
@@ -244,6 +249,7 @@ def add_paper():
             "svg_id": None,
             "x": 0,
             "y": 0,
+            "rotation": 0,
         }
     )
 
@@ -253,8 +259,6 @@ def update_paper():
     """Update paper position or assigned SVG."""
     data = request.json
     paper_id = data.get("id")
-
-    app.logger.info("update_paper request: %s", data)
 
     if paper_id not in paper_store:
         return jsonify({"error": "Paper not found"}), 404
@@ -289,8 +293,39 @@ def update_paper():
     if "paper_name" in data:
         paper_data["paper_name"] = data["paper_name"]
 
-    app.logger.info("update_paper stored: %s", paper_data)
+    if "rotation" in data:
+        paper_data["rotation"] = int(data["rotation"])
     return jsonify({"success": True, "paper": paper_data})
+
+
+@app.route("/api/select-output-folder", methods=["POST"])
+def select_output_folder():
+    """Open a native folder picker on macOS and return the selected path."""
+    try:
+        if platform.system() != "Darwin":
+            return jsonify({"error": "Native picker not supported on this OS"}), 400
+
+        result = subprocess.run(
+            [
+                "osascript",
+                "-e",
+                'POSIX path of (choose folder with prompt "Select export folder")',
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        folder = result.stdout.strip()
+        if result.returncode != 0:
+            return (
+                jsonify({"error": result.stderr.strip() or "Folder picker canceled"}),
+                400,
+            )
+
+        return jsonify({"output_folder": folder})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 def _fit_svg_to_paper(paper_data, svg_data):
@@ -343,6 +378,7 @@ def list_papers():
             "svg_scale": paper_data.get("svg_scale", 1.0),
             "x": paper_data["x"],
             "y": paper_data["y"],
+            "rotation": paper_data.get("rotation", 0),
         }
         # Include SVG info if assigned
         if paper_data.get("svg_id"):
@@ -379,6 +415,7 @@ def clone_paper(paper_id):
         "svg_scale": original_paper.get("svg_scale", 1.0),
         "x": original_paper["x"] + 50,  # Offset slightly
         "y": original_paper["y"] + 50,
+        "rotation": original_paper.get("rotation", 0),
     }
 
     return jsonify(
@@ -391,6 +428,7 @@ def clone_paper(paper_id):
             "svg_scale": paper_store[new_paper_id].get("svg_scale", 1.0),
             "x": paper_store[new_paper_id]["x"],
             "y": paper_store[new_paper_id]["y"],
+            "rotation": paper_store[new_paper_id].get("rotation", 0),
         }
     )
 
@@ -512,18 +550,9 @@ def export():
                 "paper_height": paper.get("paper_height", svg_data.get("height", 0)),
                 "paper_name": paper.get("paper_name"),
                 "svg_scale": paper.get("svg_scale", 1.0),
+                "rotation": paper.get("rotation", 0),
             }
             export_svgs.append(export_entry)
-            app.logger.info("export entry: %s", {
-                "paper_id": paper.get("id"),
-                "svg_id": svg_id,
-                "x": export_entry["x"],
-                "y": export_entry["y"],
-                "paper_width": export_entry["paper_width"],
-                "paper_height": export_entry["paper_height"],
-                "svg_scale": export_entry["svg_scale"],
-                "filename": export_entry.get("filename"),
-            })
 
         if not export_svgs:
             return jsonify({"error": "No assigned SVGs to export"}), 400
@@ -534,8 +563,9 @@ def export():
 
         # Generate combined SVG
         combined_svg_path = os.path.join(output_folder, "combined.svg")
-        app.logger.info("Generating combined SVG: %s", combined_svg_path)
-        generate_combined_svg(export_svgs, canvas_width, canvas_height, combined_svg_path)
+        generate_combined_svg(
+            export_svgs, canvas_width, canvas_height, combined_svg_path
+        )
 
         # Generate G-code files (one per color)
         gcode_files = process_svg_to_gcode(

@@ -4,6 +4,7 @@ Handles SVG processing, conversion, and G-code generation.
 """
 
 import os
+import copy
 import subprocess
 import tempfile
 import xml.etree.ElementTree as ET
@@ -195,22 +196,7 @@ def generate_combined_svg(
             # SVG scale factor (auto-calculated to fit SVG inside paper)
             svg_scale = svg_data.get("svg_scale", 1.0)
 
-            # Debug logging
-            print(
-                "[generate_combined_svg]",
-                {
-                    "file": filepath,
-                    "x_gui": x,
-                    "y_gui": y_gui,
-                    "y_gui": y_gui,
-                    "canvas_height": canvas_height,
-                    "paper_width": paper_width,
-                    "paper_height": paper_height,
-                    "svg_width": width_mm,
-                    "svg_height": height_mm,
-                    "svg_scale": svg_scale,
-                },
-            )
+            rotation = float(svg_data.get("rotation", 0))
 
             # Calculate scaled SVG dimensions (for centering)
             scaled_svg_width = width_mm * svg_scale
@@ -233,8 +219,8 @@ def generate_combined_svg(
             svg_center_y = scaled_svg_height / 2
 
             # Build transforms (SVG applies right-to-left)
-            # We want: scale to mm -> apply svg_scale -> translate to paper center
-            # Therefore, order in string should be: translate, scale(svg_scale), scale(unit)
+            # We want: scale to mm -> apply svg_scale -> translate to paper center -> rotate about paper center
+            # Therefore, order in string should be: rotate, translate, scale(svg_scale), scale(unit)
 
             # 1. Translate to center SVG in paper (applied last)
             # After scaling, SVG center is at (svg_center_x, svg_center_y) in local coordinates
@@ -252,46 +238,31 @@ def generate_combined_svg(
             if unit_scale_x != 1.0 or unit_scale_y != 1.0:
                 transforms.append(f"scale({unit_scale_x:.6f}, {unit_scale_y:.6f})")
 
+            # 4. Rotate about the paper center (applied last)
+            if rotation % 360 != 0:
+                transforms.insert(
+                    0,
+                    f"rotate({rotation:.6f}, {paper_center_x:.6f}, {paper_center_y:.6f})",
+                )
+
             # Note: The root SVG transform (scale(1, -1) translate(0, canvas_height))
             # will convert our bottom-left coordinates to top-left for SVG rendering
 
             if transforms:
                 transform_str = " ".join(transforms)
                 g.set("transform", transform_str)
-                print("[generate_combined_svg] transform", transform_str)
 
-            # Create a wrapper SVG to preserve the original coordinate system
-            # This ensures the embedded content uses the correct viewBox
-            wrapper_svg = ET.Element("svg")
-            if viewbox_str:
-                wrapper_svg.set("viewBox", viewbox_str)
-            else:
-                # Create viewBox from original dimensions
+            # Create a wrapper SVG that preserves the original root attributes
+            # (including width/height units, viewBox, transform, preserveAspectRatio)
+            wrapper_svg = ET.Element(svg_root.tag, dict(svg_root.attrib))
+            if not wrapper_svg.get("viewBox"):
                 wrapper_svg.set(
                     "viewBox", f"0 0 {original_width:.6f} {original_height:.6f}"
                 )
-            wrapper_svg.set("width", f"{original_width:.6f}")
-            wrapper_svg.set("height", f"{original_height:.6f}")
 
-            # Copy all children from the original SVG root into the wrapper
-            def copy_element(source, target):
-                """Recursively copy element and its children."""
-                for child in source:
-                    # Skip nested SVG elements (just copy their children)
-                    if child.tag.endswith("}svg") or child.tag == "svg":
-                        copy_element(child, target)
-                    else:
-                        new_child = ET.Element(child.tag, child.attrib)
-                        if child.text:
-                            new_child.text = child.text
-                        if child.tail:
-                            new_child.tail = child.tail
-                        copy_element(child, new_child)
-                        target.append(new_child)
-
-            # Copy children from original SVG root
+            # Copy children from original SVG root (preserve attributes/transforms)
             for child in svg_root:
-                copy_element(child, wrapper_svg)
+                wrapper_svg.append(copy.deepcopy(child))
 
             g.append(wrapper_svg)
             root.append(g)
@@ -442,24 +413,65 @@ def process_svg_to_gcode(
     try:
         # Build vpype command (similar to process command but without layout/scaleto)
         # Since we're already positioning in the combined SVG, we just need to process it
-        vpype_command = (
-            f"vpype -c {temp_config_path} "
-            f"read --attr stroke {svg_path} "
-            f"forlayer "
-            f"lmove all 999 "
-            f"linemerge linesort {'--no-flip' if no_flip else '--two-opt --passes 2000'} "
-            f"rect {registration_marks_length}mm {registration_marks_length}mm {registration_marks_length}mm {registration_marks_length}mm "
-            f"rect {area_max_x - 2 * registration_marks_length}mm {registration_marks_length}mm {registration_marks_length}mm {registration_marks_length}mm "
-            f"rect {registration_marks_length}mm {area_max_y - 2 * registration_marks_length}mm {registration_marks_length}mm {registration_marks_length}mm "
-            f"rect {area_max_x - 2 * registration_marks_length}mm {area_max_y - 2 * registration_marks_length}mm {registration_marks_length}mm {registration_marks_length}mm "
-            f"lmove 1 1 "
-            f"lmove 999 2 "
-            f"gwrite -p penplotte {output_path} "
-            f"end"
+        vpype_command = [
+            "vpype",
+            "-c",
+            temp_config_path,
+            "read",
+            "--attr",
+            "stroke",
+            svg_path,
+            "forlayer",
+            "lmove",
+            "all",
+            "999",
+            "linemerge",
+            "linesort",
+        ]
+
+        if no_flip:
+            vpype_command.append("--no-flip")
+        else:
+            vpype_command.extend(["--two-opt", "--passes", "2000"])
+
+        vpype_command.extend(
+            [
+                "rect",
+                f"{registration_marks_length}mm",
+                f"{registration_marks_length}mm",
+                f"{registration_marks_length}mm",
+                f"{registration_marks_length}mm",
+                "rect",
+                f"{area_max_x - 2 * registration_marks_length}mm",
+                f"{registration_marks_length}mm",
+                f"{registration_marks_length}mm",
+                f"{registration_marks_length}mm",
+                "rect",
+                f"{registration_marks_length}mm",
+                f"{area_max_y - 2 * registration_marks_length}mm",
+                f"{registration_marks_length}mm",
+                f"{registration_marks_length}mm",
+                "rect",
+                f"{area_max_x - 2 * registration_marks_length}mm",
+                f"{area_max_y - 2 * registration_marks_length}mm",
+                f"{registration_marks_length}mm",
+                f"{registration_marks_length}mm",
+                "lmove",
+                "1",
+                "1",
+                "lmove",
+                "999",
+                "2",
+                "gwrite",
+                "-p",
+                "penplotte",
+                output_path,
+                "end",
+            ]
         )
 
         # Execute vpype command
-        subprocess.run(vpype_command, shell=True, check=True, capture_output=True)
+        subprocess.run(vpype_command, check=True, capture_output=True)
 
         # Find generated G-code files
         gcode_files = []
