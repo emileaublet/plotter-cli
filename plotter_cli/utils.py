@@ -41,6 +41,45 @@ def load_settings():
         }
 
 
+def get_settings_file_path():
+    """Get the path to the settings file that should be used for saving."""
+    # Try current directory first (user's working directory)
+    current_dir_settings = os.path.abspath("settings.yaml")
+    if os.path.exists("settings.yaml"):
+        return current_dir_settings
+    
+    # Fall back to module directory (package settings)
+    module_settings = os.path.join(os.path.dirname(__file__), "settings.yaml")
+    # If module settings doesn't exist, create it in current directory instead
+    if not os.path.exists(module_settings):
+        return current_dir_settings
+    return os.path.abspath(module_settings)
+
+
+def save_settings(settings):
+    """
+    Save settings to the YAML file.
+    
+    Args:
+        settings: Dictionary containing settings to save (must include 'general' and 'papers' keys)
+    
+    Returns:
+        str: Path to the saved settings file
+    """
+    settings_path = get_settings_file_path()
+    
+    # Ensure directory exists (only if path has a directory component)
+    dir_path = os.path.dirname(settings_path)
+    if dir_path:
+        os.makedirs(dir_path, exist_ok=True)
+    
+    # Write settings to file
+    with open(settings_path, "w", encoding="utf-8") as file:
+        yaml.dump(settings, file, default_flow_style=False, sort_keys=False, allow_unicode=True)
+    
+    return settings_path
+
+
 def parse_dimension(value):
     """Parse an SVG dimension string into a float value in mm."""
     if not value:

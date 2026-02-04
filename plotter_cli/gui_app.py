@@ -18,6 +18,7 @@ from werkzeug.utils import secure_filename
 
 from .utils import (
     load_settings,
+    save_settings,
     get_svg_dimensions,
     calculate_gcode_stats,
     estimate_draw_time,
@@ -97,9 +98,63 @@ def get_settings():
         {
             "area_width": settings["general"]["area_width"],
             "area_height": settings["general"]["area_height"],
+            "z_up_long": settings["general"]["z_up_long"],
+            "z_up_short": settings["general"]["z_up_short"],
+            "z_up_threshold": settings["general"]["z_up_threshold"],
+            "z_down": settings["general"]["z_down"],
+            "feed_rate_draw": settings["general"]["feed_rate_draw"],
+            "feed_rate_travel": settings["general"]["feed_rate_travel"],
+            "feed_rate_z": settings["general"]["feed_rate_z"],
+            "registration_marks_length": settings["general"]["registration_marks_length"],
             "papers": settings["papers"],
         }
     )
+
+
+@app.route("/api/settings", methods=["PUT"])
+def update_settings():
+    """Update plotter settings."""
+    try:
+        data = request.get_json()
+        
+        # Load current settings
+        settings = load_settings()
+        
+        # Update general settings
+        if "area_width" in data:
+            settings["general"]["area_width"] = float(data["area_width"])
+        if "area_height" in data:
+            settings["general"]["area_height"] = float(data["area_height"])
+        if "z_up_long" in data:
+            settings["general"]["z_up_long"] = float(data["z_up_long"])
+        if "z_up_short" in data:
+            settings["general"]["z_up_short"] = float(data["z_up_short"])
+        if "z_up_threshold" in data:
+            settings["general"]["z_up_threshold"] = float(data["z_up_threshold"])
+        if "z_down" in data:
+            settings["general"]["z_down"] = float(data["z_down"])
+        if "feed_rate_draw" in data:
+            settings["general"]["feed_rate_draw"] = int(data["feed_rate_draw"])
+        if "feed_rate_travel" in data:
+            settings["general"]["feed_rate_travel"] = int(data["feed_rate_travel"])
+        if "feed_rate_z" in data:
+            settings["general"]["feed_rate_z"] = int(data["feed_rate_z"])
+        if "registration_marks_length" in data:
+            settings["general"]["registration_marks_length"] = float(data["registration_marks_length"])
+        
+        # Save settings
+        settings_path = save_settings(settings)
+        
+        return jsonify({
+            "success": True,
+            "message": "Settings updated successfully",
+            "settings_path": settings_path
+        })
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 400
 
 
 @app.route("/api/papers", methods=["GET"])

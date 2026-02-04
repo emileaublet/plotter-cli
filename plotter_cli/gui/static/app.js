@@ -235,6 +235,94 @@ class PlotterStudio {
     }
   }
 
+  openSettings() {
+    const modal = document.getElementById('settings-modal');
+    if (!modal) return;
+
+    // Populate form with current settings
+    if (this.settings) {
+      document.getElementById('settings-area-width').value = this.settings.area_width;
+      document.getElementById('settings-area-height').value = this.settings.area_height;
+      document.getElementById('settings-z-up-long').value = this.settings.z_up_long;
+      document.getElementById('settings-z-up-short').value = this.settings.z_up_short;
+      document.getElementById('settings-z-up-threshold').value = this.settings.z_up_threshold;
+      document.getElementById('settings-z-down').value = this.settings.z_down;
+      document.getElementById('settings-feed-rate-draw').value = this.settings.feed_rate_draw;
+      document.getElementById('settings-feed-rate-travel').value = this.settings.feed_rate_travel;
+      document.getElementById('settings-feed-rate-z').value = this.settings.feed_rate_z;
+      document.getElementById('settings-registration-marks-length').value = this.settings.registration_marks_length;
+    }
+
+    modal.classList.add('active');
+    lucide.createIcons();
+  }
+
+  async saveSettings() {
+    try {
+      const settingsData = {
+        area_width: parseFloat(document.getElementById('settings-area-width').value),
+        area_height: parseFloat(document.getElementById('settings-area-height').value),
+        z_up_long: parseFloat(document.getElementById('settings-z-up-long').value),
+        z_up_short: parseFloat(document.getElementById('settings-z-up-short').value),
+        z_up_threshold: parseFloat(document.getElementById('settings-z-up-threshold').value),
+        z_down: parseFloat(document.getElementById('settings-z-down').value),
+        feed_rate_draw: parseInt(document.getElementById('settings-feed-rate-draw').value),
+        feed_rate_travel: parseInt(document.getElementById('settings-feed-rate-travel').value),
+        feed_rate_z: parseInt(document.getElementById('settings-feed-rate-z').value),
+        registration_marks_length: parseFloat(document.getElementById('settings-registration-marks-length').value),
+      };
+
+      // Validate inputs
+      if (isNaN(settingsData.area_width) || settingsData.area_width <= 0) {
+        await showAlert('Error', 'Canvas width must be a positive number', 'error');
+        return;
+      }
+      if (isNaN(settingsData.area_height) || settingsData.area_height <= 0) {
+        await showAlert('Error', 'Canvas height must be a positive number', 'error');
+        return;
+      }
+
+      const response = await fetch('/api/settings', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(settingsData),
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to save settings');
+      }
+
+      const result = await response.json();
+
+      // Update local settings
+      this.settings = { ...this.settings, ...settingsData };
+
+      // Check if canvas dimensions changed
+      const canvasChanged = 
+        this.canvasWidth !== settingsData.area_width ||
+        this.canvasHeight !== settingsData.area_height;
+
+      if (canvasChanged) {
+        this.canvasWidth = settingsData.area_width;
+        this.canvasHeight = settingsData.area_height;
+        this.setupCanvas();
+        this.updateBedInfo();
+        this.render();
+      }
+
+      // Close modal
+      document.getElementById('settings-modal').classList.remove('active');
+
+      await showAlert('Settings Saved', 'Settings have been saved successfully.', 'success');
+    } catch (error) {
+      console.error('Error saving settings:', error);
+      await showAlert('Error', 'Failed to save settings: ' + error.message, 'error');
+    }
+  }
+
   updateBedInfo() {
     const widthEl = document.getElementById('bed-width');
     const heightEl = document.getElementById('bed-height');
@@ -272,6 +360,7 @@ class PlotterStudio {
     });
 
     // Clear All
+    document.getElementById('settings-btn')?.addEventListener('click', () => this.openSettings());
     document.getElementById('clear-all-btn')?.addEventListener('click', () => this.clearAll());
 
     // Export
@@ -293,6 +382,31 @@ class PlotterStudio {
 
     confirmAddBtn?.addEventListener('click', () => {
       this.addPaperFromSelect();
+    });
+
+    // Settings modal
+    const settingsModal = document.getElementById('settings-modal');
+    const closeSettingsBtn = document.getElementById('close-settings-btn');
+    const settingsCancelBtn = document.getElementById('settings-cancel-btn');
+    const settingsSaveBtn = document.getElementById('settings-save-btn');
+
+    closeSettingsBtn?.addEventListener('click', () => {
+      settingsModal?.classList.remove('active');
+    });
+
+    settingsCancelBtn?.addEventListener('click', () => {
+      settingsModal?.classList.remove('active');
+    });
+
+    settingsSaveBtn?.addEventListener('click', () => {
+      this.saveSettings();
+    });
+
+    // Close settings modal when clicking outside
+    settingsModal?.addEventListener('click', (e) => {
+      if (e.target === settingsModal) {
+        settingsModal.classList.remove('active');
+      }
     });
 
     // Auto-arrange

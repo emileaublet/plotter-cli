@@ -42,6 +42,9 @@
           </div>
         </div>
         <div class="header-actions">
+          <button id="settings-btn" class="btn btn-secondary" title="Settings">
+            <i data-lucide="settings" class="icon" style="width: 16px; height: 16px;"></i>
+          </button>
           <button id="clear-all-btn" class="btn btn-secondary" title="Clear All">
             <i data-lucide="trash-2" class="icon" style="width: 16px; height: 16px;"></i>
           </button>
@@ -250,6 +253,85 @@
             <div class="form-actions">
               <button id="confirm-add-paper-btn" class="btn btn-primary btn-full">Add Paper</button>
             </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Settings Modal -->
+      <div id="settings-modal" class="modal">
+        <div class="modal-content" style="max-width: 600px;">
+          <div class="modal-header">
+            <h2>Settings</h2>
+            <button class="icon-btn" id="close-settings-btn">
+              <i data-lucide="x" style="width: 16px; height: 16px;"></i>
+            </button>
+          </div>
+          <div class="modal-body" style="max-height: 70vh; overflow-y: auto;">
+            <form id="settings-form">
+              <!-- Canvas Dimensions -->
+              <div class="form-section">
+                <h3 style="margin: 0 0 1rem 0; font-size: 1rem; font-weight: 600; color: var(--foreground);">Canvas Dimensions</h3>
+                <div class="form-group">
+                  <label>Width (mm)</label>
+                  <input type="number" id="settings-area-width" class="input-number" step="0.1" min="1" required>
+                </div>
+                <div class="form-group">
+                  <label>Height (mm)</label>
+                  <input type="number" id="settings-area-height" class="input-number" step="0.1" min="1" required>
+                </div>
+              </div>
+
+              <!-- Pen Lift Settings -->
+              <div class="form-section" style="margin-top: 1.5rem;">
+                <h3 style="margin: 0 0 1rem 0; font-size: 1rem; font-weight: 600; color: var(--foreground);">Pen Lift Settings</h3>
+                <div class="form-group">
+                  <label>Z Up (Long) (mm)</label>
+                  <input type="number" id="settings-z-up-long" class="input-number" step="0.1" min="0" required>
+                </div>
+                <div class="form-group">
+                  <label>Z Up (Short) (mm)</label>
+                  <input type="number" id="settings-z-up-short" class="input-number" step="0.1" min="0" required>
+                </div>
+                <div class="form-group">
+                  <label>Z Up Threshold (mm)</label>
+                  <input type="number" id="settings-z-up-threshold" class="input-number" step="0.1" min="0" required>
+                </div>
+                <div class="form-group">
+                  <label>Z Down (mm)</label>
+                  <input type="number" id="settings-z-down" class="input-number" step="0.01" required>
+                </div>
+              </div>
+
+              <!-- Feed Rates -->
+              <div class="form-section" style="margin-top: 1.5rem;">
+                <h3 style="margin: 0 0 1rem 0; font-size: 1rem; font-weight: 600; color: var(--foreground);">Feed Rates (mm/min)</h3>
+                <div class="form-group">
+                  <label>Draw Feed Rate</label>
+                  <input type="number" id="settings-feed-rate-draw" class="input-number" step="1" min="1" required>
+                </div>
+                <div class="form-group">
+                  <label>Travel Feed Rate</label>
+                  <input type="number" id="settings-feed-rate-travel" class="input-number" step="1" min="1" required>
+                </div>
+                <div class="form-group">
+                  <label>Z-Axis Feed Rate</label>
+                  <input type="number" id="settings-feed-rate-z" class="input-number" step="1" min="1" required>
+                </div>
+              </div>
+
+              <!-- Other Settings -->
+              <div class="form-section" style="margin-top: 1.5rem;">
+                <h3 style="margin: 0 0 1rem 0; font-size: 1rem; font-weight: 600; color: var(--foreground);">Other Settings</h3>
+                <div class="form-group">
+                  <label>Registration Marks Length (mm)</label>
+                  <input type="number" id="settings-registration-marks-length" class="input-number" step="0.1" min="0" required>
+                </div>
+              </div>
+            </form>
+          </div>
+          <div class="modal-footer" style="padding: 1rem 1.5rem; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: 0.5rem;">
+            <button id="settings-cancel-btn" class="btn btn-secondary">Cancel</button>
+            <button id="settings-save-btn" class="btn btn-primary">Save</button>
           </div>
         </div>
       </div>

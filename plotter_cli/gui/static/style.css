@@ -611,6 +611,18 @@ body:has(.custom-title-bar.frameless) .app-container {
   letter-spacing: 0.05em;
 }
 
+.form-section {
+  margin-bottom: 1.5rem;
+  padding-bottom: 1.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.form-section:last-child {
+  border-bottom: none;
+  margin-bottom: 0;
+  padding-bottom: 0;
+}
+
 .input-select,
 .input-number,
 .input-text {
