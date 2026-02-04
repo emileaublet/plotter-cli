@@ -4,24 +4,54 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Plotter Studio</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
     <link
       rel="stylesheet"
       href="{{ url_for('static', filename='style.css') }}?v={{ cache_bust }}"
     />
+    <script src="https://unpkg.com/lucide@latest"></script>
   </head>
   <body>
+    <!-- Custom Title Bar (only shown in frameless mode) -->
+    <div id="custom-title-bar" class="custom-title-bar pywebview-drag-region">
+      <div class="traffic-lights">
+        <button class="traffic-light traffic-light-close" id="traffic-light-close" title="Close">
+          <span class="traffic-light-icon"></span>
+        </button>
+        <button class="traffic-light traffic-light-minimize" id="traffic-light-minimize" title="Minimize">
+          <span class="traffic-light-icon"></span>
+        </button>
+        <button class="traffic-light traffic-light-maximize" id="traffic-light-maximize" title="Maximize">
+          <span class="traffic-light-icon"></span>
+        </button>
+      </div>
+      <div class="title-bar-title">Plotter Studio</div>
+    </div>
     <div class="app-container">
       <!-- Header -->
       <header class="header">
-        <h1>Plotter Studio</h1>
+        <div class="header-left">
+          <h1>Plotter Studio</h1>
+          <div class="header-info">
+            <span id="canvas-size" class="header-info-text">Loading...</span>
+          </div>
+        </div>
         <div class="header-actions">
+          <button id="clear-all-btn" class="btn btn-secondary" title="Clear All">
+            <i data-lucide="trash-2" class="icon" style="width: 16px; height: 16px;"></i>
+          </button>
+          <button id="fullscreen-btn" class="btn btn-secondary" title="Toggle Fullscreen">
+            <i data-lucide="maximize" class="icon" style="width: 16px; height: 16px;"></i>
+          </button>
           <button id="export-btn" class="btn btn-primary">
+            <i data-lucide="download" class="icon" style="width: 16px; height: 16px;"></i>
             <span id="export-btn-text">Export</span>
-            <span
-              id="export-btn-spinner"
-              class="spinner"
-              style="display: none"
-            ></span>
+            <span id="export-btn-spinner" class="spinner" style="display: none"></span>
           </button>
         </div>
       </header>
@@ -30,112 +60,69 @@
       <div class="main-content">
         <!-- Sidebar -->
         <aside class="sidebar">
+          <!-- Machine Bed Info -->
           <div class="sidebar-section">
-            <h2>Add Paper</h2>
-            <select id="add-paper-select" class="input-select">
-              <option value="">Select paper size...</option>
-            </select>
-            <button
-              id="add-paper-btn"
-              class="btn btn-secondary"
-              style="margin-top: 0.5rem"
-            >
-              Add Paper to Canvas
-            </button>
-          </div>
-
-          <div class="sidebar-section">
-            <h2>Papers on Canvas</h2>
-            <div id="paper-list" class="svg-list">
-              <p class="empty-state">No papers added yet</p>
+            <div class="section-header">
+              <i data-lucide="square" class="section-icon" style="width: 14px; height: 14px;"></i>
+              <span class="section-title">Machine Bed</span>
+            </div>
+            <div class="info-grid">
+              <div class="info-item">
+                <span class="info-label">Width</span>
+                <span id="bed-width" class="info-value">—</span>
+              </div>
+              <div class="info-item">
+                <span class="info-label">Height</span>
+                <span id="bed-height" class="info-value">—</span>
+              </div>
             </div>
           </div>
 
-          <div
-            class="sidebar-section"
-            id="transform-panel"
-            style="display: none"
-          >
-            <h2>Paper Settings</h2>
-            <div class="transform-controls">
-              <div class="control-group">
-                <label>Paper Size</label>
-                <select id="paper-size-select" class="input-select">
-                  <option value="custom">Custom</option>
-                </select>
-              </div>
-              <div class="control-group">
-                <label>Assign SVG</label>
-                <select id="assign-svg-select" class="input-select">
-                  <option value="">None</option>
-                </select>
-              </div>
-              <div class="control-group">
-                <label>Position X (mm)</label>
-                <input
-                  type="number"
-                  id="transform-x"
-                  step="0.1"
-                  class="input-number"
-                />
-              </div>
-              <div class="control-group">
-                <label>Position Y (mm)</label>
-                <input
-                  type="number"
-                  id="transform-y"
-                  step="0.1"
-                  class="input-number"
-                />
-              </div>
-              <div class="control-group" style="display: flex; gap: 0.5rem">
-                <button
-                  id="rotate-left-btn"
-                  class="btn btn-secondary"
-                  type="button"
-                >
-                  Rotate Left
-                </button>
-                <button
-                  id="rotate-right-btn"
-                  class="btn btn-secondary"
-                  type="button"
-                >
-                  Rotate Right
-                </button>
-              </div>
-              <button id="clone-paper-btn" class="btn btn-secondary">
-                Clone Paper
-              </button>
-              <button
-                id="remove-paper-btn"
-                class="btn btn-danger"
-                style="margin-top: 0.5rem"
-              >
-                Remove Paper
+          <!-- Papers Section -->
+          <div class="sidebar-section">
+            <div class="section-header">
+              <i data-lucide="file-text" class="section-icon" style="width: 14px; height: 14px;"></i>
+              <span class="section-title">Papers</span>
+              <button id="add-paper-btn" class="icon-btn" title="Add Paper">
+                <i data-lucide="plus" style="width: 16px; height: 16px;"></i>
               </button>
             </div>
-          </div>
-
-          <div class="sidebar-section">
-            <h2>SVG Library</h2>
-            <input
-              type="file"
-              id="file-input"
-              accept=".svg"
-              style="display: none"
-            />
-            <button id="add-svg-btn" class="btn btn-secondary">
-              Add SVG to Library
-            </button>
-            <div id="svg-library" class="svg-list" style="margin-top: 1rem">
-              <p class="empty-state">No SVGs in library</p>
+            <div id="paper-list" class="item-list">
+              <div class="empty-state">
+                <i data-lucide="file-text" style="width: 32px; height: 32px; opacity: 0.3;"></i>
+                <p>No papers yet</p>
+                <p class="empty-state-hint">Click + to add a paper</p>
+              </div>
             </div>
           </div>
 
+          <!-- SVG Library Section -->
           <div class="sidebar-section">
-            <h2>Arrange</h2>
-            <button id="auto-arrange-btn" class="btn btn-secondary">
+            <div class="section-header">
+              <i data-lucide="package" class="section-icon" style="width: 14px; height: 14px;"></i>
+              <span class="section-title">SVG Library</span>
+            </div>
+            <input type="file" id="file-input" accept=".svg" style="display: none" />
+            <button id="add-svg-btn" class="btn btn-secondary btn-full">
+              <i data-lucide="upload" class="icon" style="width: 16px; height: 16px;"></i>
+              Add SVG
+            </button>
+            <div id="svg-library" class="item-list" style="margin-top: 0.75rem">
+              <div class="empty-state">
+                <i data-lucide="package" style="width: 32px; height: 32px; opacity: 0.3;"></i>
+                <p>No SVGs in library</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- Arrange Section -->
+          <div class="sidebar-section">
+            <div class="section-header">
+              <i data-lucide="layout-grid" class="section-icon" style="width: 14px; height: 14px;"></i>
+              <span class="section-title">Arrange</span>
+            </div>
+            <button id="auto-arrange-btn" class="btn btn-secondary btn-full">
+              <i data-lucide="layout-grid" class="icon" style="width: 16px; height: 16px;"></i>
               Auto-Arrange
             </button>
           </div>
@@ -143,18 +130,140 @@
 
         <!-- Canvas Area -->
         <main class="canvas-area">
-          <div class="canvas-container">
+          <!-- Floating Toolbar -->
+          <div class="toolbar">
+            <div class="toolbar-group">
+              <button id="tool-select" class="tool-btn active" data-tool="select" title="Select (V)">
+                <i data-lucide="mouse-pointer-2" style="width: 16px; height: 16px;"></i>
+              </button>
+              <button id="tool-pan" class="tool-btn" data-tool="pan" title="Pan (H)">
+                <i data-lucide="hand" style="width: 16px; height: 16px;"></i>
+              </button>
+            </div>
+            <div class="toolbar-divider"></div>
+            <div class="toolbar-group">
+              <button id="zoom-out-btn" class="tool-btn" title="Zoom Out">
+                <i data-lucide="zoom-out" style="width: 16px; height: 16px;"></i>
+              </button>
+              <span id="zoom-level" class="zoom-level" title="Click to reset view">100%</span>
+              <button id="zoom-in-btn" class="tool-btn" title="Zoom In">
+                <i data-lucide="zoom-in" style="width: 16px; height: 16px;"></i>
+              </button>
+            </div>
+          </div>
+
+          <div class="canvas-container" id="canvas-container">
             <canvas id="canvas"></canvas>
             <div id="canvas-overlay" class="canvas-overlay"></div>
           </div>
           <div class="canvas-info">
-            <span id="canvas-size"></span>
-            <span id="mouse-position"></span>
+            <span id="mouse-position" class="canvas-info-text">—</span>
           </div>
         </main>
+
+        <!-- Inspector Panel -->
+        <aside class="inspector" id="inspector-panel">
+          <div class="inspector-header">
+            <i data-lucide="sliders" class="section-icon" style="width: 14px; height: 14px;"></i>
+            <span class="section-title">Inspector</span>
+          </div>
+          <div id="inspector-content" class="inspector-content">
+            <div class="empty-state">
+              <i data-lucide="sliders" style="width: 32px; height: 32px; opacity: 0.3;"></i>
+              <p>No paper selected</p>
+              <p class="empty-state-hint">Select a paper to edit</p>
+            </div>
+          </div>
+        </aside>
+      </div>
+
+      <!-- Alert/Notification Modal -->
+      <div id="alert-modal" class="modal">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h2 id="alert-title">Alert</h2>
+            <button class="icon-btn" id="close-alert-btn">
+              <i data-lucide="x" style="width: 16px; height: 16px;"></i>
+            </button>
+          </div>
+          <div class="modal-body">
+            <p id="alert-message" style="margin: 0; line-height: 1.5; white-space: pre-wrap; word-wrap: break-word; word-break: break-word; overflow-wrap: break-word;"></p>
+          </div>
+          <div class="modal-footer" style="padding: 1rem 1.5rem; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: 0.5rem;">
+            <button id="alert-ok-btn" class="btn btn-primary">OK</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Confirmation Modal -->
+      <div id="confirm-modal" class="modal">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h2 id="confirm-title">Confirm</h2>
+            <button class="icon-btn" id="close-confirm-btn">
+              <i data-lucide="x" style="width: 16px; height: 16px;"></i>
+            </button>
+          </div>
+          <div class="modal-body">
+            <p id="confirm-message" style="margin: 0; line-height: 1.5; white-space: pre-wrap; word-wrap: break-word; word-break: break-word; overflow-wrap: break-word;"></p>
+          </div>
+          <div class="modal-footer" style="padding: 1rem 1.5rem; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: 0.5rem;">
+            <button id="confirm-cancel-btn" class="btn btn-secondary">Cancel</button>
+            <button id="confirm-ok-btn" class="btn btn-primary">OK</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Paper Size Modal -->
+      <div id="paper-modal" class="modal">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h2>Add Paper</h2>
+            <button class="icon-btn" id="close-modal-btn">
+              <i data-lucide="x" style="width: 16px; height: 16px;"></i>
+            </button>
+          </div>
+          <div class="modal-body">
+            <div class="form-group">
+              <label>Paper Size</label>
+              <select id="add-paper-select" class="input-select">
+                <option value="">Select paper size...</option>
+              </select>
+            </div>
+            <div id="custom-paper-inputs" class="form-group" style="display: none; margin-top: 1rem;">
+              <div class="form-group" style="margin-bottom: 0.75rem;">
+                <label>Unit</label>
+                <select id="custom-paper-unit" class="input-select" style="margin-top: 0.25rem;">
+                  <option value="mm">Millimeters (mm)</option>
+                  <option value="in">Inches (in)</option>
+                </select>
+              </div>
+              <div class="form-group" style="margin-bottom: 0.75rem;">
+                <label>Width</label>
+                <input type="number" id="custom-paper-width" class="input-number" step="1" min="1" placeholder="Width" style="margin-top: 0.25rem; width: 100%;">
+              </div>
+              <div class="form-group" style="margin-bottom: 0.75rem;">
+                <label>Height</label>
+                <input type="number" id="custom-paper-height" class="input-number" step="1" min="1" placeholder="Height" style="margin-top: 0.25rem; width: 100%;">
+              </div>
+            </div>
+            <div class="form-actions">
+              <button id="confirm-add-paper-btn" class="btn btn-primary btn-full">Add Paper</button>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 
     <script src="{{ url_for('static', filename='app.js') }}?v={{ cache_bust }}"></script>
+    <script>
+      // Store frameless mode flag
+      window.FRAMELESS_MODE = {{ 'true' if frameless_mode else 'false' }};
+      
+      // Initialize Lucide icons after page load
+      document.addEventListener('DOMContentLoaded', () => {
+        lucide.createIcons();
+      });
+    </script>
   </body>
 </html>

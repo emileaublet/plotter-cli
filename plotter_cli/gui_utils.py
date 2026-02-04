@@ -127,7 +127,7 @@ def generate_combined_svg(
     root.set("viewBox", f"0 0 {canvas_width} {canvas_height}")
 
     # Process each SVG
-    for svg_data in svgs:
+    for idx, svg_data in enumerate(svgs):
         filepath = svg_data["filepath"]
         if not os.path.exists(filepath):
             continue
@@ -204,7 +204,7 @@ def generate_combined_svg(
 
             transforms = []
             # SVG transforms are applied right-to-left (last in list is applied first)
-            # The root SVG has a transform that inverts Y, so we work in bottom-left coordinates
+            # Transform order in string (right-to-left): rotate, translate(final), translate(center), scale(svg_scale), scale(unit)
 
             # Calculate scale factor to convert from original SVG coordinate system to mm
             unit_scale_x = width_mm / original_width if original_width > 0 else 1.0
@@ -214,36 +214,47 @@ def generate_combined_svg(
             paper_center_x = x + paper_width / 2
             paper_center_y = y_gui + paper_height / 2
 
-            # Calculate center of scaled SVG (in plotter coordinates)
-            svg_center_x = scaled_svg_width / 2
-            svg_center_y = scaled_svg_height / 2
-
-            # Build transforms (SVG applies right-to-left)
-            # We want: scale to mm -> apply svg_scale -> translate to paper center -> rotate about paper center
-            # Therefore, order in string should be: rotate, translate, scale(svg_scale), scale(unit)
-
-            # 1. Translate to center SVG in paper (applied last)
-            # After scaling, SVG center is at (svg_center_x, svg_center_y) in local coordinates
-            # We want it at paper center (paper_center_x, paper_center_y) in plotter coordinates
-            # But we need to account for the paper position
-            offset_x = paper_center_x - svg_center_x
-            offset_y = paper_center_y - svg_center_y
-            transforms.append(f"translate({offset_x:.6f}, {offset_y:.6f})")
-
-            # 2. Apply SVG scale (to fit inside paper)
+            # Build transforms - SVG applies right-to-left, so we build in reverse order
+            # Desired application order: scale(unit) -> scale(svg) -> translate(center) -> translate(paper_pos) -> rotate
+            # SVG applies right-to-left, so transform string should be: rotate translate(paper_pos) translate(center) scale(svg) scale(unit)
+            # This means the list should be: [rotate, translate(paper_pos), translate(center), scale(svg), scale(unit)]
+            
+            # Step 1: Scale from original units to mm (applied FIRST)
+            # Step 2: Apply SVG scale to fit inside paper (applied SECOND)  
+            # We want application order: scale(unit) THEN scale(svg)
+            # SVG applies right-to-left, so in the string we need: scale(svg) scale(unit)
+            # To get this, we append in reverse: scale(svg) first, then scale(unit)
             if svg_scale != 1.0:
                 transforms.append(f"scale({svg_scale:.6f}, {svg_scale:.6f})")
-
-            # 3. Scale from original units to mm (applied first)
             if unit_scale_x != 1.0 or unit_scale_y != 1.0:
                 transforms.append(f"scale({unit_scale_x:.6f}, {unit_scale_y:.6f})")
 
-            # 4. Rotate about the paper center (applied last)
+            # Step 3: Translate to center the scaled SVG within the paper (applied THIRD)
+            # After scaling, SVG's (0,0) is at top-left of scaled SVG
+            # To center: translate by half the difference between paper and scaled SVG size
+            # This translation happens in the paper's local coordinate system (before moving to canvas)
+            center_offset_x = (paper_width - scaled_svg_width) / 2
+            center_offset_y = (paper_height - scaled_svg_height) / 2
+            
+            # Step 4: Translate to paper position on canvas (applied FOURTH)
+            # First, insert paper_pos translation
+            transforms.insert(0, f"translate({x:.6f}, {y_gui:.6f})")
+            
+            # Step 5: Translate to center the scaled SVG within the paper (applied THIRD, BEFORE paper_pos)
+            # Insert center_offset AFTER paper_pos in the list, so it comes BEFORE in the string
+            # This ensures center_offset is applied in paper's local space, then paper is moved to canvas
+            # Result: [translate(paper_pos), translate(center), ...] → "translate(paper_pos) translate(center) ..."
+            # Applied right-to-left: translate(center) in paper-local space, then translate(paper_pos) to canvas ✓
+            if abs(center_offset_x) > 0.001 or abs(center_offset_y) > 0.001:
+                transforms.insert(1, f"translate({center_offset_x:.6f}, {center_offset_y:.6f})")
+
+            # Step 6: Rotate about the paper center (applied LAST, so inserted at BEGINNING)
+            # Rotation center must be in canvas coordinates AFTER translate(paper_pos) is applied
+            # After translate(paper_pos), the paper's center in canvas coords is:
+            rotation_center_x = x + paper_width / 2
+            rotation_center_y = y_gui + paper_height / 2
             if rotation % 360 != 0:
-                transforms.insert(
-                    0,
-                    f"rotate({rotation:.6f}, {paper_center_x:.6f}, {paper_center_y:.6f})",
-                )
+                transforms.insert(0, f"rotate({rotation:.6f}, {rotation_center_x:.6f}, {rotation_center_y:.6f})")
 
             # Note: The root SVG transform (scale(1, -1) translate(0, canvas_height))
             # will convert our bottom-left coordinates to top-left for SVG rendering
@@ -304,12 +315,13 @@ def generate_guide_gcode(svgs: List[Dict], output_path: str, settings: Dict):
     # Get canvas height for Y coordinate inversion
     canvas_height = settings["general"].get("area_height", 470)
 
-    # Generate rectangle for each SVG (paper boundaries, no rotation/scaling)
+    # Generate rectangle for each SVG (paper boundaries, accounting for rotation)
     for svg_data in svgs:
         x = svg_data.get("x", 0)
         y_gui = svg_data.get("y", 0)  # GUI coordinates (top-left origin)
+        rotation = float(svg_data.get("rotation", 0))
 
-        # Use paper dimensions directly (paper cannot be scaled or rotated)
+        # Use paper dimensions directly (paper cannot be scaled)
         paper_width = svg_data.get("paper_width", svg_data.get("width", 0))
         paper_height = svg_data.get("paper_height", svg_data.get("height", 0))
 
@@ -320,14 +332,35 @@ def generate_guide_gcode(svgs: List[Dict], output_path: str, settings: Dict):
         if paper_width <= 0 or paper_height <= 0:
             continue
 
-        # Paper corners in plotter coordinates (bottom-left origin)
-        # Position (x, y) is the bottom-left corner of the paper
-        corners_world = [
-            (x, y),  # bottom-left
-            (x + paper_width, y),  # bottom-right
-            (x + paper_width, y + paper_height),  # top-right
-            (x, y + paper_height),  # top-left
+        # Calculate paper center in canvas coordinates (for rotation)
+        paper_center_x = x + paper_width / 2
+        paper_center_y_plotter = y + paper_height / 2
+
+        # Paper corners in local coordinates (relative to paper center, before rotation)
+        # These are the corners of an unrotated paper centered at origin
+        half_width = paper_width / 2
+        half_height = paper_height / 2
+        corners_local = [
+            (-half_width, -half_height),  # bottom-left (relative to center)
+            (half_width, -half_height),   # bottom-right
+            (half_width, half_height),     # top-right
+            (-half_width, half_height),   # top-left
         ]
+
+        # Apply rotation to corners
+        rotation_rad = math.radians(rotation)
+        cos_r = math.cos(rotation_rad)
+        sin_r = math.sin(rotation_rad)
+        
+        corners_world = []
+        for corner_local_x, corner_local_y in corners_local:
+            # Rotate around origin
+            rotated_x = corner_local_x * cos_r - corner_local_y * sin_r
+            rotated_y = corner_local_x * sin_r + corner_local_y * cos_r
+            # Translate to paper center position
+            world_x = paper_center_x + rotated_x
+            world_y = paper_center_y_plotter + rotated_y
+            corners_world.append((world_x, world_y))
 
         # Draw rectangle by moving to each corner
         gcode_lines.append(f"; Rectangle for {svg_data.get('filename', 'unknown')}")

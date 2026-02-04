@@ -876,11 +876,27 @@ def studio(
     debug: bool = typer.Option(
         False, "--debug", help="Enable debug mode"
     ),
+    native: bool = typer.Option(
+        True, "--native/--browser", help="Open in native window (default) or browser"
+    ),
+    frameless: bool = typer.Option(
+        True, "--frameless/--titlebar", help="Remove title bar (frameless window, default: True)"
+    ),
+    vibrancy: bool = typer.Option(
+        True, "--vibrancy/--no-vibrancy", help="Enable macOS vibrancy effect (macOS only, default: True)"
+    ),
 ):
     """Launch the Plotter Studio GUI."""
     from .gui_app import run_gui
 
-    run_gui(host=host, port=port, debug=debug)
+    run_gui(
+        host=host,
+        port=port,
+        debug=debug,
+        native_window=native,
+        frameless=frameless,
+        vibrancy=vibrancy,
+    )
 
 
 if __name__ == "__main__":

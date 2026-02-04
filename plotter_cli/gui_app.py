@@ -16,7 +16,13 @@ from pathlib import Path
 from flask import Flask, render_template, request, jsonify, send_file
 from werkzeug.utils import secure_filename
 
-from .utils import load_settings, get_svg_dimensions
+from .utils import (
+    load_settings,
+    get_svg_dimensions,
+    calculate_gcode_stats,
+    estimate_draw_time,
+    format_time,
+)
 from .gui_utils import (
     svg_to_png,
     generate_combined_svg,
@@ -42,6 +48,31 @@ app.config["MAX_CONTENT_LENGTH"] = (
 svg_library = {}  # Available SVGs that can be assigned to papers
 paper_store = {}  # Papers on the canvas
 
+# Window control API for frameless windows
+class WindowControlAPI:
+    """API exposed to JavaScript for window control in frameless mode."""
+    
+    def __init__(self, window):
+        self.window = window
+    
+    def minimize(self):
+        """Minimize the window."""
+        if self.window:
+            self.window.minimize()
+    
+    def maximize(self):
+        """Maximize/restore the window."""
+        if self.window:
+            # Toggle between maximize and restore
+            # Note: pywebview doesn't have a direct toggle, so we'll use maximize/restore
+            # For now, just maximize - you can enhance this to toggle
+            self.window.maximize()
+    
+    def close(self):
+        """Close the window."""
+        if self.window:
+            self.window.destroy()
+
 
 def allowed_file(filename):
     """Check if file extension is allowed."""
@@ -51,7 +82,11 @@ def allowed_file(filename):
 @app.route("/")
 def index():
     """Serve the main GUI page."""
-    return render_template("index.html", cache_bust=str(int(time.time())))
+    import time
+    cache_bust = str(int(time.time()))
+    # Check if we're in frameless mode (passed as query param)
+    frameless_mode = request.args.get('frameless', 'false').lower() == 'true'
+    return render_template("index.html", cache_bust=cache_bust, frameless_mode=frameless_mode)
 
 
 @app.route("/api/settings", methods=["GET"])
@@ -445,36 +480,281 @@ def remove_paper(paper_id):
 
 @app.route("/api/remove-svg/<svg_id>", methods=["DELETE"])
 def remove_svg(svg_id):
-    """Remove an SVG from the library."""
+    """Remove an SVG from the library. Also removes papers that have this SVG assigned."""
     if svg_id not in svg_library:
         return jsonify({"error": "SVG not found"}), 404
 
-    # Check if any papers are using this SVG
+    # Find papers using this SVG
     papers_using_svg = [p for p in paper_store.values() if p.get("svg_id") == svg_id]
-    if papers_using_svg:
-        return (
-            jsonify(
-                {
-                    "error": f"Cannot remove SVG: it is assigned to {len(papers_using_svg)} paper(s)"
-                }
-            ),
-            400,
-        )
+    paper_ids_to_remove = [p["id"] for p in papers_using_svg]
+
+    # Remove papers that have this SVG assigned
+    for paper_id in paper_ids_to_remove:
+        if paper_id in paper_store:
+            del paper_store[paper_id]
 
     svg_data = svg_library[svg_id]
+    filepath = svg_data["filepath"]
 
     # Clean up files
     try:
-        if os.path.exists(svg_data["filepath"]):
-            os.remove(svg_data["filepath"])
-        png_path = svg_to_png(svg_data["filepath"])
-        if os.path.exists(png_path):
+        # Get PNG path before deleting SVG file
+        png_path = None
+        if os.path.exists(filepath):
+            try:
+                png_path = svg_to_png(filepath)
+            except Exception:
+                pass  # PNG path generation might fail
+        
+        # Delete SVG file
+        if os.path.exists(filepath):
+            os.remove(filepath)
+        
+        # Delete PNG preview if it exists
+        if png_path and os.path.exists(png_path):
             os.remove(png_path)
     except Exception:
         pass  # Ignore cleanup errors
 
     del svg_library[svg_id]
-    return jsonify({"success": True})
+    return jsonify({
+        "success": True,
+        "papers_removed": len(paper_ids_to_remove),
+        "paper_ids": paper_ids_to_remove
+    })
+
+
+@app.route("/api/clear-all", methods=["POST"])
+def clear_all():
+    """Clear all papers and SVGs from the canvas and library."""
+    # Count items before clearing
+    paper_count = len(paper_store)
+    svg_count = len(svg_library)
+    
+    # Clean up SVG files
+    for svg_id, svg_data in list(svg_library.items()):
+        filepath = svg_data.get("filepath")
+        if filepath and os.path.exists(filepath):
+            try:
+                os.remove(filepath)
+                # Try to remove PNG preview
+                try:
+                    png_path = svg_to_png(filepath)
+                    if png_path and os.path.exists(png_path):
+                        os.remove(png_path)
+                except Exception:
+                    pass
+            except Exception:
+                pass  # Ignore cleanup errors
+    
+    # Clear all data
+    paper_store.clear()
+    svg_library.clear()
+    
+    return jsonify({
+        "success": True,
+        "papers_removed": paper_count,
+        "svgs_removed": svg_count
+    })
+
+
+def generate_stats_file(
+    stats_path: str,
+    export_svgs: list,
+    gcode_files: list,
+    canvas_width: float,
+    canvas_height: float,
+):
+    """
+    Generate a stats.txt file with export statistics.
+    
+    Args:
+        stats_path: Path to save the stats file
+        export_svgs: List of SVG export entries with paper info
+        gcode_files: List of generated G-code file paths
+        canvas_width: Canvas width in mm
+        canvas_height: Canvas height in mm
+    """
+    lines = []
+    lines.append("=" * 60)
+    lines.append("EXPORT STATISTICS")
+    lines.append("=" * 60)
+    lines.append("")
+    
+    # Operations section
+    lines.append("OPERATIONS")
+    lines.append("-" * 60)
+    lines.append(f"Canvas Size: {canvas_width:.1f}mm × {canvas_height:.1f}mm")
+    lines.append(f"Total Papers: {len(export_svgs)}")
+    unique_svgs = set()
+    for svg in export_svgs:
+        filename = svg.get('filename')
+        if filename:
+            unique_svgs.add(filename)
+    lines.append(f"Total SVGs: {len(unique_svgs)}")
+    lines.append("")
+    
+    # Papers and transformations
+    lines.append("Papers and Transformations:")
+    for idx, svg_entry in enumerate(export_svgs, 1):
+        paper_name = svg_entry.get("paper_name") or "Custom"
+        filename = svg_entry.get("filename", "unknown.svg")
+        x = svg_entry.get("x", 0)
+        y = svg_entry.get("y", 0)
+        paper_width = svg_entry.get("paper_width", 0)
+        paper_height = svg_entry.get("paper_height", 0)
+        svg_scale = svg_entry.get("svg_scale", 1.0)
+        rotation = svg_entry.get("rotation", 0)
+        
+        lines.append(f"  Paper {idx}: {paper_name}")
+        lines.append(f"    SVG: {filename}")
+        lines.append(f"    Paper Size: {paper_width:.1f}mm × {paper_height:.1f}mm")
+        lines.append(f"    Position: ({x:.2f}mm, {y:.2f}mm)")
+        lines.append(f"    Scale: {svg_scale:.4f}")
+        lines.append(f"    Rotation: {rotation:.1f}°")
+        lines.append("")
+    
+    lines.append("")
+    lines.append("=" * 60)
+    lines.append("G-CODE STATISTICS BY COLOR")
+    lines.append("=" * 60)
+    lines.append("")
+    
+    # Get feed rate settings for time estimation
+    settings = load_settings()
+    feed_rate_draw = settings["general"].get("feed_rate_draw", 4000)
+    feed_rate_travel = settings["general"].get("feed_rate_travel", 6000)
+    feed_rate_z = settings["general"].get("feed_rate_z", 1500)
+    z_up = settings["general"].get("z_up_long", 12)
+    z_down = settings["general"].get("z_down", 0)
+    
+    # Calculate stats for each G-code file (exclude guide.gcode)
+    color_stats = []
+    total_travel_mm = 0.0
+    total_draw_mm = 0.0
+    total_pen_lifts = 0
+    total_segments = 0
+    
+    for gcode_file in gcode_files:
+        if not os.path.exists(gcode_file):
+            continue
+        # Skip guide.gcode files
+        if "guide.gcode" in gcode_file.lower():
+            continue
+            
+        stats = calculate_gcode_stats(gcode_file)
+        color_name = stats.get("color_name") or "unknown"
+        hex_code = stats.get("hex_code") or "000000"
+        draw_mm = stats.get("draw_distance_mm", 0.0)
+        travel_mm = stats.get("travel_distance_mm", 0.0)
+        pen_lifts = stats.get("num_pen_lifts", 0)
+        segments = stats.get("num_segments", 0)
+        total_mm = draw_mm + travel_mm
+        
+        # Calculate estimated time
+        estimated_time_min = estimate_draw_time(
+            draw_mm, travel_mm, pen_lifts,
+            feed_rate_draw, feed_rate_travel, feed_rate_z,
+            z_up, z_down
+        )
+        
+        # Calculate average segment length
+        avg_segment_length = draw_mm / segments if segments > 0 else 0.0
+        
+        color_stats.append({
+            "color_name": color_name,
+            "hex_code": hex_code,
+            "draw_mm": draw_mm,
+            "travel_mm": travel_mm,
+            "total_mm": total_mm,
+            "pen_lifts": pen_lifts,
+            "segments": segments,
+            "estimated_time_min": estimated_time_min,
+            "avg_segment_length": avg_segment_length,
+        })
+        
+        total_travel_mm += travel_mm
+        total_draw_mm += draw_mm
+        total_pen_lifts += pen_lifts
+        total_segments += segments
+    
+    # Sort by color name for consistent output
+    color_stats.sort(key=lambda x: x["color_name"])
+    
+    # Calculate total estimated time
+    total_estimated_time_min = estimate_draw_time(
+        total_draw_mm, total_travel_mm, total_pen_lifts,
+        feed_rate_draw, feed_rate_travel, feed_rate_z,
+        z_up, z_down
+    )
+    
+    # Print per-color stats - Distance table
+    lines.append("Distance Statistics:")
+    lines.append(f"{'Color':<20} {'Travel (mm)':>15} {'Draw (mm)':>15} {'Total (mm)':>15}")
+    lines.append("-" * 60)
+    
+    for stat in color_stats:
+        color_display = f"{stat['color_name']} (#{stat['hex_code']})"
+        lines.append(
+            f"{color_display:<20} {stat['travel_mm']:>15.2f} "
+            f"{stat['draw_mm']:>15.2f} {stat['total_mm']:>15.2f}"
+        )
+    
+    lines.append("-" * 60)
+    lines.append(f"{'TOTAL':<20} {total_travel_mm:>15.2f} {total_draw_mm:>15.2f} {total_travel_mm + total_draw_mm:>15.2f}")
+    lines.append("")
+    
+    # Print per-color stats - Pen operations
+    lines.append("Pen Operations:")
+    lines.append(f"{'Color':<20} {'Pen Lifts':>15} {'Segments':>15} {'Avg Seg (mm)':>15}")
+    lines.append("-" * 60)
+    
+    for stat in color_stats:
+        color_display = f"{stat['color_name']} (#{stat['hex_code']})"
+        lines.append(
+            f"{color_display:<20} {stat['pen_lifts']:>15} "
+            f"{stat['segments']:>15} {stat['avg_segment_length']:>15.2f}"
+        )
+    
+    lines.append("-" * 60)
+    avg_segment_length_total = total_draw_mm / total_segments if total_segments > 0 else 0.0
+    lines.append(f"{'TOTAL':<20} {total_pen_lifts:>15} {total_segments:>15} {avg_segment_length_total:>15.2f}")
+    lines.append("")
+    
+    # Print per-color stats - Time estimates
+    lines.append("Estimated Time:")
+    lines.append(f"{'Color':<20} {'Estimated Time':>30}")
+    lines.append("-" * 60)
+    
+    for stat in color_stats:
+        color_display = f"{stat['color_name']} (#{stat['hex_code']})"
+        time_str = format_time(stat['estimated_time_min'])
+        lines.append(f"{color_display:<20} {time_str:>30}")
+    
+    lines.append("-" * 60)
+    total_time_str = format_time(total_estimated_time_min)
+    lines.append(f"{'TOTAL':<20} {total_time_str:>30}")
+    lines.append("")
+    
+    # Summary statistics
+    lines.append("=" * 60)
+    lines.append("SUMMARY")
+    lines.append("=" * 60)
+    lines.append(f"Total Colors: {len(color_stats)}")
+    lines.append(f"Total Pen Lifts: {total_pen_lifts}")
+    lines.append(f"Total Segments: {total_segments}")
+    lines.append(f"Total Travel Distance: {total_travel_mm:.2f}mm")
+    lines.append(f"Total Draw Distance: {total_draw_mm:.2f}mm")
+    lines.append(f"Total Distance: {total_travel_mm + total_draw_mm:.2f}mm")
+    if total_segments > 0:
+        lines.append(f"Average Segment Length: {avg_segment_length_total:.2f}mm")
+    lines.append(f"Estimated Total Time: {total_time_str}")
+    lines.append("")
+    lines.append("=" * 60)
+    
+    # Write to file
+    with open(stats_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
 
 
 @app.route("/api/auto-arrange", methods=["POST"])
@@ -531,9 +811,16 @@ def export():
     if not output_folder:
         output_folder = tempfile.mkdtemp(prefix="plotter_export_")
 
+    # Log output location
+    print(f"\n{'='*60}")
+    print(f"EXPORT: Output folder: {output_folder}")
+    print(f"{'='*60}\n")
+
     try:
         # Build export list from papers with assigned SVGs
         export_svgs = []
+        paper_count = 0
+        
         for paper in paper_store.values():
             svg_id = paper.get("svg_id")
             if not svg_id:
@@ -542,6 +829,7 @@ def export():
             if not svg_data:
                 continue
 
+            paper_count += 1
             export_entry = {
                 **svg_data,
                 "x": paper.get("x", 0),
@@ -576,6 +864,25 @@ def export():
         guide_gcode_path = os.path.join(output_folder, "guide.gcode")
         generate_guide_gcode(list(paper_store.values()), guide_gcode_path, settings)
 
+        # Generate stats.txt file
+        stats_path = os.path.join(output_folder, "stats.txt")
+        generate_stats_file(
+            stats_path,
+            export_svgs,
+            gcode_files,
+            canvas_width,
+            canvas_height
+        )
+
+        # Log all generated files
+        print(f"EXPORT: Generated files:")
+        print(f"  - Combined SVG: {combined_svg_path}")
+        print(f"  - Guide G-code: {guide_gcode_path}")
+        print(f"  - Stats: {stats_path}")
+        for gcode_file in gcode_files:
+            print(f"  - G-code: {gcode_file}")
+        print(f"{'='*60}\n")
+
         return jsonify(
             {
                 "success": True,
@@ -583,6 +890,7 @@ def export():
                 "combined_svg": combined_svg_path,
                 "gcode_files": gcode_files,
                 "guide_gcode": guide_gcode_path,
+                "stats": stats_path,
             }
         )
 
@@ -590,12 +898,115 @@ def export():
         return jsonify({"error": str(e)}), 500
 
 
-def run_gui(host="127.0.0.1", port=5000, debug=False):
-    """Run the Flask GUI application."""
-    print(f"Starting Plotter Studio GUI...")
-    print(f"Open your browser to: http://{host}:{port}")
-    try:
-        app.run(host=host, port=port, debug=debug, threaded=True)
-    except Exception as e:
-        print(f"Error starting server: {e}")
-        raise
+def run_gui(
+    host="127.0.0.1",
+    port=5000,
+    debug=False,
+    native_window=False,
+    frameless=False,
+    vibrancy=False,
+):
+    """
+    Run the Flask GUI application.
+    
+    Args:
+        host: Host to bind the server to
+        port: Port to bind the server to
+        debug: Enable debug mode
+        native_window: If True, open in a native window instead of browser
+        frameless: If True, remove the title bar (creates frameless window)
+        vibrancy: If True, enable macOS vibrancy effect (macOS only)
+    """
+    import threading
+    import webbrowser
+    
+    url = f"http://{host}:{port}"
+    
+    if native_window:
+        try:
+            import webview
+            
+            print(f"Starting Plotter Studio GUI in native window...")
+            
+            # Start Flask server in a separate thread
+            def run_flask():
+                app.run(host=host, port=port, debug=debug, threaded=True, use_reloader=False)
+            
+            server_thread = threading.Thread(target=run_flask, daemon=True)
+            server_thread.start()
+            
+            # Wait a moment for server to start
+            import time
+            time.sleep(0.5)
+            
+            # Create native window
+            # Add frameless query param if in frameless mode
+            window_url = url
+            if frameless:
+                window_url = f"{url}?frameless=true"
+            
+            window_kwargs = {
+                "title": "Plotter Studio",
+                "url": window_url,
+                "width": 1400,
+                "height": 900,
+                "min_size": (1000, 600),
+                "resizable": True,
+            }
+            
+            # Add frameless option
+            if frameless:
+                window_kwargs["frameless"] = True
+                window_kwargs["easy_drag"] = False  # We'll use custom drag regions instead
+                # Create window control API and expose it
+                window_control_api = WindowControlAPI(None)  # Will be set after window creation
+                window_kwargs["js_api"] = window_control_api
+            
+            # Add vibrancy option (macOS only)
+            if vibrancy and platform.system() == "Darwin":
+                window_kwargs["vibrancy"] = True
+            
+            # Create window
+            window = webview.create_window(**window_kwargs)
+            
+            # Set window reference in API if frameless
+            if frameless and window_control_api:
+                window_control_api.window = window
+            
+            # Set icon via webview.start() for GTK/QT backends (not macOS)
+            start_kwargs = {"debug": debug}
+            
+            # Start webview (this blocks until window is closed)
+            webview.start(**start_kwargs)
+            
+        except ImportError:
+            print("Warning: pywebview not installed. Falling back to browser mode.")
+            print(f"Install it with: pip install pywebview")
+            print(f"Starting Plotter Studio GUI...")
+            print(f"Open your browser to: {url}")
+            try:
+                app.run(host=host, port=port, debug=debug, threaded=True)
+            except Exception as e:
+                print(f"Error starting server: {e}")
+                raise
+        except Exception as e:
+            print(f"Error starting native window: {e}")
+            print(f"Falling back to browser mode. Open your browser to: {url}")
+            try:
+                app.run(host=host, port=port, debug=debug, threaded=True)
+            except Exception as e:
+                print(f"Error starting server: {e}")
+                raise
+    else:
+        print(f"Starting Plotter Studio GUI...")
+        print(f"Open your browser to: {url}")
+        try:
+            # Try to open browser automatically
+            webbrowser.open(url)
+        except Exception:
+            pass
+        try:
+            app.run(host=host, port=port, debug=debug, threaded=True)
+        except Exception as e:
+            print(f"Error starting server: {e}")
+            raise

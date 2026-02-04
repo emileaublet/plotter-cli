@@ -83,3 +83,9 @@ ENV/
 
 # pytest
 .pytest_cache/
+
+# macOS App Bundle (not building .app bundles)
+dist/
+build/
+*.app
+*.dmg

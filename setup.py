@@ -1,15 +1,14 @@
 from setuptools import setup, find_packages
 
+# Note: Dependencies are now specified in pyproject.toml
+# This setup.py is kept for backward compatibility
+# For modern builds, use: pip install -e .
+
 setup(
     name="plotter",
     version="1.0.0",
     packages=find_packages(),
-    install_requires=[
-        "typer",
-        "questionary",
-        "rich",
-        "pyyaml",
-    ],
+    # install_requires moved to pyproject.toml - don't specify here
     entry_points={
         "console_scripts": [
             "plotter=plotter_cli.commands:app",
@@ -19,7 +18,6 @@ setup(
     description="A CLI tool for managing SVG files and paper sizes.",
     classifiers=[
         "Programming Language :: Python :: 3",
-        "License :: OSI Approved :: MIT License",
         "Operating System :: OS Independent",
     ],
     python_requires=">=3.6",
