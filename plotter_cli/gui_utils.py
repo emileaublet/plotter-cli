@@ -41,7 +41,8 @@ def svg_to_png(svg_path: str, output_path: str = None, dpi: int = 150) -> Option
 
         cairosvg.svg2png(url=svg_path, write_to=output_path, dpi=dpi)
         return output_path
-    except Exception:
+    except Exception as e:
+        print(f"Warning: cairosvg failed for {svg_path}: {e}")
         # Fallback to svglib + reportlab
         try:
             from svglib.svglib import svg2rlg
@@ -51,7 +52,8 @@ def svg_to_png(svg_path: str, output_path: str = None, dpi: int = 150) -> Option
             if drawing:
                 renderPM.drawToFile(drawing, output_path, fmt="PNG", dpi=dpi)
                 return output_path
-        except Exception:
+        except Exception as e2:
+            print(f"Warning: svglib fallback also failed for {svg_path}: {e2}")
             return None
 
     return None
@@ -549,7 +551,10 @@ def process_svg_to_gcode(
         return gcode_files
 
     except subprocess.CalledProcessError as e:
-        raise RuntimeError(f"Failed to execute vpype command: {e}")
+        stderr_output = e.stderr.decode("utf-8", errors="replace") if e.stderr else ""
+        raise RuntimeError(
+            f"Failed to execute vpype command: {e}\n{stderr_output}".strip()
+        )
     finally:
         # Clean up temporary config file
         if os.path.exists(temp_config_path):

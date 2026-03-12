@@ -524,8 +524,12 @@ def process(
         console.print(f"\n[dim]📁 {output_folder}[/dim]")
 
     except subprocess.CalledProcessError as e:
+        stderr_output = e.stderr.decode("utf-8", errors="replace") if e.stderr else ""
+        error_detail = f"{e}"
+        if stderr_output:
+            error_detail += f"\n\nVpype output:\n{stderr_output}"
         console.print(
-            Panel(f"[ERROR] Failed to execute vpype command: {e}", style="bold red")
+            Panel(f"[ERROR] Failed to execute vpype command: {error_detail}", style="bold red")
         )
         raise typer.Exit(code=1)
     finally:

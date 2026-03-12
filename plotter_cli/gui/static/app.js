@@ -50,7 +50,7 @@ function showAlert(title, message, type = 'info') {
     };
 
     modal.classList.add('active');
-    if (window.lucide) lucide.createIcons();
+    if (window.lucide) lucide.createIcons({ nodes: [modal] });
   });
 }
 
@@ -84,6 +84,50 @@ function showConfirm(title, message) {
   });
 }
 
+// Item 17: Toast notification system
+function showToast(message, type = 'success', duration = 3000) {
+  const container = document.getElementById('toast-container');
+  if (!container) return;
+
+  const toast = document.createElement('div');
+  const colors = { success: '#2a9d5c', error: '#c0392b', info: '#2980b9' };
+  const bgColor = colors[type] || colors.success;
+
+  toast.style.cssText = `
+    background: ${bgColor};
+    color: #fff;
+    padding: 10px 16px;
+    border-radius: 8px;
+    font-size: 13px;
+    font-family: Inter, sans-serif;
+    max-width: 320px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    transform: translateX(120%);
+    transition: transform 0.25s ease;
+    pointer-events: auto;
+    cursor: pointer;
+    line-height: 1.4;
+    word-break: break-all;
+  `;
+  toast.textContent = message;
+  container.appendChild(toast);
+
+  // Slide in
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      toast.style.transform = 'translateX(0)';
+    });
+  });
+
+  const dismiss = () => {
+    toast.style.transform = 'translateX(120%)';
+    setTimeout(() => toast.remove(), 280);
+  };
+
+  toast.addEventListener('click', dismiss);
+  setTimeout(dismiss, duration);
+}
+
 class PlotterStudio {
   constructor() {
     this.canvas = document.getElementById('canvas');
@@ -93,6 +137,7 @@ class PlotterStudio {
     this.papers = [];
     this.svgLibrary = [];
     this.selectedPaperId = null;
+    this.selectedPaperIds = new Set(); // multi-select
     this.settings = null;
 
     this.scale = 2; // pixels per mm
@@ -108,8 +153,82 @@ class PlotterStudio {
     this.panning = false;
     this.dragStart = { x: 0, y: 0 };
     this.dragStartTransform = null;
+    this.dragStartPositions = {}; // for multi-select drag
+
+    // Snap-to-grid
+    this.snapToGrid = false;
+
+    // Last mouse event (for zoom coordinate update)
+    this.lastMouseEvent = null;
+
+    // Undo/redo stacks
+    this.undoStack = [];
+    this.redoStack = [];
 
     this.init();
+  }
+
+  // ─── Utility ───────────────────────────────────────────────────────────────
+
+  _debounce(fn, delay = 300) {
+    let timer;
+    return (...args) => {
+      clearTimeout(timer);
+      timer = setTimeout(() => fn.apply(this, args), delay);
+    };
+  }
+
+  refresh({ paperList = true, inspector = true, render = true } = {}) {
+    if (paperList) this.updatePaperList();
+    if (inspector) this.updateInspector();
+    if (render) this.render();
+  }
+
+  // ─── Undo / Redo ──────────────────────────────────────────────────────────
+
+  _saveUndoSnapshot() {
+    const snapshot = this.papers.map(p => ({ ...p }));
+    this.undoStack.push(snapshot);
+    if (this.undoStack.length > 50) this.undoStack.shift();
+    this.redoStack = [];
+    this._updateUndoRedoButtons();
+  }
+
+  _updateUndoRedoButtons() {
+    const undoBtn = document.getElementById('undo-btn');
+    const redoBtn = document.getElementById('redo-btn');
+    if (undoBtn) undoBtn.disabled = this.undoStack.length === 0;
+    if (redoBtn) redoBtn.disabled = this.redoStack.length === 0;
+  }
+
+  async _restoreSnapshot(snapshot) {
+    try {
+      await fetch('/api/bulk-update-papers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ papers: snapshot }),
+      });
+      this.papers = snapshot.map(p => ({ ...p }));
+      this.refresh();
+    } catch (e) {
+      console.error('Failed to restore snapshot:', e);
+    }
+  }
+
+  async undo() {
+    if (this.undoStack.length === 0) return;
+    const snapshot = this.undoStack.pop();
+    this.redoStack.push(this.papers.map(p => ({ ...p })));
+    this._updateUndoRedoButtons();
+    await this._restoreSnapshot(snapshot);
+  }
+
+  async redo() {
+    if (this.redoStack.length === 0) return;
+    const snapshot = this.redoStack.pop();
+    this.undoStack.push(this.papers.map(p => ({ ...p })));
+    this._updateUndoRedoButtons();
+    await this._restoreSnapshot(snapshot);
   }
 
   async init() {
@@ -254,7 +373,7 @@ class PlotterStudio {
     }
 
     modal.classList.add('active');
-    lucide.createIcons();
+    if (window.lucide) lucide.createIcons({ nodes: [modal] });
   }
 
   async saveSettings() {
@@ -373,11 +492,27 @@ class PlotterStudio {
     const confirmAddBtn = document.getElementById('confirm-add-paper-btn');
 
     addPaperBtn?.addEventListener('click', () => {
+      // Item 28: reset unit selector on open
+      const unitSelect = document.getElementById('custom-paper-unit');
+      if (unitSelect) {
+        unitSelect.value = 'mm';
+        unitSelect.dispatchEvent(new Event('change'));
+      }
+      const paperSelect = document.getElementById('add-paper-select');
+      if (paperSelect) {
+        paperSelect.value = '';
+        this.toggleCustomPaperInputs(false);
+      }
       paperModal?.classList.add('active');
     });
 
     closeModalBtn?.addEventListener('click', () => {
       this.closePaperModal();
+    });
+
+    // Item 25: backdrop click closes paper modal
+    paperModal?.addEventListener('click', (e) => {
+      if (e.target === paperModal) this.closePaperModal();
     });
 
     confirmAddBtn?.addEventListener('click', () => {
@@ -412,18 +547,33 @@ class PlotterStudio {
     // Auto-arrange
     document.getElementById('auto-arrange-btn')?.addEventListener('click', () => this.autoArrange());
 
+    // Alignment buttons (Item 20)
+    document.querySelectorAll('[data-align]').forEach(btn => {
+      btn.addEventListener('click', () => this.alignPapers(btn.dataset.align));
+    });
+
     // Toolbar tools
     document.getElementById('tool-select')?.addEventListener('click', () => this.setTool('select'));
     document.getElementById('tool-pan')?.addEventListener('click', () => this.setTool('pan'));
+
+    // Snap-to-grid toggle (Item 21)
+    document.getElementById('snap-grid-btn')?.addEventListener('click', () => this.toggleSnapToGrid());
+
+    // Undo/redo buttons (Item 23)
+    document.getElementById('undo-btn')?.addEventListener('click', () => this.undo());
+    document.getElementById('redo-btn')?.addEventListener('click', () => this.redo());
+
+    // Help button (Item 26)
+    document.getElementById('help-btn')?.addEventListener('click', () => this.showHelp());
 
     // Zoom controls
     document.getElementById('zoom-in-btn')?.addEventListener('click', () => this.zoomIn());
     document.getElementById('zoom-out-btn')?.addEventListener('click', () => this.zoomOut());
     document.getElementById('zoom-level')?.addEventListener('click', () => this.resetView());
-    
+
     // Fullscreen toggle
     document.getElementById('fullscreen-btn')?.addEventListener('click', () => this.toggleFullscreen());
-    
+
     // Listen for fullscreen changes (e.g., ESC key)
     document.addEventListener('fullscreenchange', () => {
       this.updateFullscreenIcon();
@@ -431,26 +581,20 @@ class PlotterStudio {
 
     // Canvas mouse events
     this.canvas.addEventListener('mousedown', (e) => this.onMouseDown(e));
+    // Item 6: single merged mousemove listener
     this.canvas.addEventListener('mousemove', (e) => this.onMouseMove(e));
     this.canvas.addEventListener('mouseup', () => this.onMouseUp());
     this.canvas.addEventListener('wheel', (e) => this.onWheel(e), { passive: false });
 
-    // Mouse position tracking
-    this.canvas.addEventListener('mousemove', (e) => {
-      const point = this.getCanvasPoint(e);
-      const mouseLabel = document.getElementById('mouse-position');
-      if (mouseLabel) {
-        mouseLabel.textContent = `${point.x.toFixed(1)}mm, ${point.y.toFixed(1)}mm`;
-      }
-    });
-
     // Keyboard shortcuts
     document.addEventListener('keydown', (e) => {
-      if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA') return;
+      const isTyping = e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA';
+      if (isTyping) return;
+
       if (e.key === 'v' || e.key === 'V') this.setTool('select');
       if (e.key === 'h' || e.key === 'H') this.setTool('pan');
+      if (e.key === '?') { e.preventDefault(); this.showHelp(); }
       if (e.key === 'Escape' || e.key === 'Esc') {
-        // If pan tool is active, switch back to select
         if (this.activeTool === 'pan') {
           e.preventDefault();
           this.setTool('select');
@@ -461,6 +605,57 @@ class PlotterStudio {
         this.panning = true;
         this.canvas.style.cursor = 'grabbing';
       }
+
+      // Item 18: Delete/Backspace removes selected paper(s)
+      if ((e.key === 'Delete' || e.key === 'Backspace') && (this.selectedPaperId || this.selectedPaperIds.size > 0)) {
+        e.preventDefault();
+        this.removeSelectedPaper();
+      }
+
+      // Item 19: Arrow keys nudge selected paper
+      const arrowKeys = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'];
+      if (arrowKeys.includes(e.key) && this.selectedPaperId) {
+        e.preventDefault();
+        const step = e.shiftKey ? 0.1 : 1;
+        const paper = this.papers.find(p => p.id === this.selectedPaperId);
+        if (paper && !paper.locked) {
+          if (e.key === 'ArrowLeft') paper.x = (paper.x || 0) - step;
+          if (e.key === 'ArrowRight') paper.x = (paper.x || 0) + step;
+          if (e.key === 'ArrowUp') paper.y = (paper.y || 0) - step;
+          if (e.key === 'ArrowDown') paper.y = (paper.y || 0) + step;
+          this.render();
+          // Update inspector inputs
+          const xInput = document.getElementById('inspector-x');
+          const yInput = document.getElementById('inspector-y');
+          if (xInput) xInput.value = paper.x.toFixed(1);
+          if (yInput) yInput.value = paper.y.toFixed(1);
+          // Debounced backend update
+          if (!this._nudgeDebounced) {
+            this._nudgeDebounced = this._debounce((pid) => {
+              const p = this.papers.find(pp => pp.id === pid);
+              if (p) this.updatePaperPosition('x', p.x).then(() => this.updatePaperPosition('y', p.y));
+            }, 300);
+          }
+          this._nudgeDebounced(paper.id);
+        }
+      }
+
+      // Undo/redo (Item 23)
+      if ((e.metaKey || e.ctrlKey) && e.key === 'z') {
+        e.preventDefault();
+        if (e.shiftKey) this.redo();
+        else this.undo();
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key === 'y') {
+        e.preventDefault();
+        this.redo();
+      }
+
+      // Cmd/Ctrl+D: clone selected paper
+      if ((e.metaKey || e.ctrlKey) && (e.key === 'd' || e.key === 'D')) {
+        e.preventDefault();
+        if (this.selectedPaperId) this.cloneSelectedPaper();
+      }
     });
 
     document.addEventListener('keyup', (e) => {
@@ -469,6 +664,28 @@ class PlotterStudio {
         this.canvas.style.cursor = this.activeTool === 'pan' ? 'grab' : 'crosshair';
       }
     });
+
+    // Close help modal
+    document.getElementById('close-help-btn')?.addEventListener('click', () => {
+      document.getElementById('help-modal')?.classList.remove('active');
+    });
+    document.getElementById('help-modal')?.addEventListener('click', (e) => {
+      if (e.target === document.getElementById('help-modal')) {
+        document.getElementById('help-modal').classList.remove('active');
+      }
+    });
+  }
+
+  showHelp() {
+    document.getElementById('help-modal')?.classList.add('active');
+    if (window.lucide) lucide.createIcons({ nodes: [document.getElementById('help-modal')] });
+  }
+
+  toggleSnapToGrid() {
+    this.snapToGrid = !this.snapToGrid;
+    const btn = document.getElementById('snap-grid-btn');
+    if (btn) btn.classList.toggle('active', this.snapToGrid);
+    this.render();
   }
 
   setTool(tool) {
@@ -531,7 +748,7 @@ class PlotterStudio {
     } else {
       icon.setAttribute('data-lucide', 'maximize');
     }
-    if (window.lucide) lucide.createIcons();
+    if (window.lucide) lucide.createIcons({ nodes: [fullscreenBtn] });
   }
 
   centerCanvas() {
@@ -553,6 +770,14 @@ class PlotterStudio {
     this.canvasTransform.scale = Math.min(Math.max(this.canvasTransform.scale * delta, 0.1), 5);
     this.updateZoomDisplay();
     this.render();
+    // Item 27: update coordinate label using last known mouse position
+    if (this.lastMouseEvent) {
+      const point = this.getCanvasPoint(this.lastMouseEvent);
+      const mouseLabel = document.getElementById('mouse-position');
+      if (mouseLabel) {
+        mouseLabel.textContent = `${point.x.toFixed(1)}mm, ${point.y.toFixed(1)}mm`;
+      }
+    }
   }
 
   populatePaperSelects() {
@@ -663,8 +888,7 @@ class PlotterStudio {
           <p>No SVGs in library</p>
         </div>
       `;
-      // Reinitialize icons after DOM update
-      if (window.lucide) lucide.createIcons();
+      if (window.lucide) lucide.createIcons({ nodes: [list] });
       return;
     }
 
@@ -696,7 +920,7 @@ class PlotterStudio {
       item.addEventListener('click', (e) => {
         // Don't trigger assignment if clicking on action buttons
         if (e.target.closest('.icon-btn')) return;
-        
+
         const svgId = item.dataset.svgId;
         if (this.selectedPaperId) {
           this.assignSvgToPaper(svgId);
@@ -712,9 +936,8 @@ class PlotterStudio {
         this.removeSvg(svgId);
       });
     });
-    
-    // Reinitialize icons after DOM update
-    if (window.lucide) lucide.createIcons();
+
+    if (window.lucide) lucide.createIcons({ nodes: [list] });
   }
 
   async loadPapers() {
@@ -748,8 +971,7 @@ class PlotterStudio {
           <p class="empty-state-hint">Click + to add a paper</p>
         </div>
       `;
-      // Reinitialize icons after DOM update
-      if (window.lucide) lucide.createIcons();
+      if (window.lucide) lucide.createIcons({ nodes: [list] });
       return;
     }
 
@@ -758,11 +980,12 @@ class PlotterStudio {
         const name = paper.paper_name || 'Custom';
         const size = `${paper.paper_width.toFixed(0)}mm × ${paper.paper_height.toFixed(0)}mm`;
         const assigned = paper.svg_id ? `Assigned: ${this.getSvgFilename(paper.svg_id)}` : 'No SVG';
-        const isSelected = paper.id === this.selectedPaperId;
+        const isSelected = paper.id === this.selectedPaperId || this.selectedPaperIds.has(paper.id);
+        const lockHtml = paper.locked ? lucideIconHTML('lock', 12, '', 'margin-left: 4px; opacity: 0.7;') : '';
         return `
           <div class="list-item ${isSelected ? 'selected' : ''}" data-paper-id="${paper.id}">
             <div class="list-item-content">
-              <div class="list-item-name">${this.escapeHtml(name)}</div>
+              <div class="list-item-name">${this.escapeHtml(name)}${lockHtml}</div>
               <div class="list-item-info">${size} • ${assigned}</div>
             </div>
             <div class="list-item-actions">
@@ -792,9 +1015,8 @@ class PlotterStudio {
         });
       }
     });
-    
-    // Reinitialize icons after DOM update
-    if (window.lucide) lucide.createIcons();
+
+    if (window.lucide) lucide.createIcons({ nodes: [list] });
   }
 
   getSvgFilename(svgId) {
@@ -804,9 +1026,11 @@ class PlotterStudio {
 
   selectPaper(paperId) {
     this.selectedPaperId = paperId;
-    this.updatePaperList();
-    this.updateInspector();
-    this.render();
+    // Single click: clear multi-select (unless it's already in the set from shift-click)
+    if (!this.selectedPaperIds.has(paperId)) {
+      this.selectedPaperIds.clear();
+    }
+    this.refresh();
   }
 
   async removePaper(paperId) {
@@ -826,12 +1050,65 @@ class PlotterStudio {
       if (this.selectedPaperId === paperId) {
         this.selectedPaperId = null;
       }
-      this.updatePaperList();
-      this.updateInspector();
-      this.render();
+      this.selectedPaperIds.delete(paperId);
+      this.refresh();
     } catch (error) {
       console.error('Error removing paper:', error);
       await showAlert('Error', 'Failed to remove paper: ' + error.message, 'error');
+    }
+  }
+
+  async removeSelectedPaper() {
+    const idsToRemove = this.selectedPaperIds.size > 0
+      ? [...this.selectedPaperIds]
+      : (this.selectedPaperId ? [this.selectedPaperId] : []);
+
+    if (idsToRemove.length === 0) return;
+
+    const msg = idsToRemove.length === 1
+      ? 'Remove this paper?'
+      : `Remove ${idsToRemove.length} selected papers?`;
+    const confirmed = await showConfirm('Remove Paper', msg);
+    if (!confirmed) return;
+
+    for (const pid of idsToRemove) {
+      try {
+        const response = await fetch(`/api/remove-paper/${pid}`, { method: 'DELETE' });
+        if (response.ok) {
+          this.papers = this.papers.filter(p => p.id !== pid);
+          this.selectedPaperIds.delete(pid);
+          if (this.selectedPaperId === pid) this.selectedPaperId = null;
+        }
+      } catch (e) {
+        console.error('Error removing paper:', e);
+      }
+    }
+    this.refresh();
+  }
+
+  async alignPapers(action) {
+    this._saveUndoSnapshot();
+    try {
+      const paperIds = this.selectedPaperIds.size > 0 ? [...this.selectedPaperIds] : [];
+      const response = await fetch('/api/align-papers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, paper_ids: paperIds }),
+      });
+      if (!response.ok) {
+        const err = await response.json();
+        throw new Error(err.error || 'Alignment failed');
+      }
+      const result = await response.json();
+      for (const updatedPaper of (result.papers || [])) {
+        const local = this.papers.find(p => p.id === updatedPaper.id);
+        if (local) Object.assign(local, updatedPaper);
+      }
+      this.refresh();
+      showToast(`Papers aligned: ${action.replace(/_/g, ' ')}`);
+    } catch (e) {
+      console.error('Alignment error:', e);
+      await showAlert('Error', 'Alignment failed: ' + e.message, 'error');
     }
   }
 
@@ -876,9 +1153,7 @@ class PlotterStudio {
 
       // Update UI
       this.updateSvgLibraryList();
-      this.updatePaperList();
-      this.updateInspector();
-      this.render();
+      this.refresh();
     } catch (error) {
       console.error('Error removing SVG:', error);
       await showAlert('Error', 'Failed to remove SVG: ' + error.message, 'error');
@@ -889,6 +1164,23 @@ class PlotterStudio {
     const content = document.getElementById('inspector-content');
     if (!content) return;
 
+    // Item 22: multi-select summary
+    if (this.selectedPaperIds.size > 1) {
+      content.innerHTML = `
+        <div class="empty-state">
+          ${lucideIconHTML('layers', 32, '', 'opacity: 0.3;')}
+          <p>${this.selectedPaperIds.size} papers selected</p>
+          <p class="empty-state-hint">Shift+click to add/remove</p>
+        </div>
+        <div class="form-actions" style="margin-top: 1rem;">
+          <button class="btn btn-danger btn-full" id="remove-multi-btn">Remove Selected</button>
+        </div>
+      `;
+      document.getElementById('remove-multi-btn')?.addEventListener('click', () => this.removeSelectedPaper());
+      if (window.lucide) lucide.createIcons({ nodes: [content] });
+      return;
+    }
+
     if (!this.selectedPaperId) {
       content.innerHTML = `
         <div class="empty-state">
@@ -897,19 +1189,25 @@ class PlotterStudio {
           <p class="empty-state-hint">Select a paper to edit</p>
         </div>
       `;
-      // Reinitialize icons after DOM update
-      if (window.lucide) lucide.createIcons();
+      if (window.lucide) lucide.createIcons({ nodes: [content] });
       return;
     }
 
     const paper = this.papers.find((p) => p.id === this.selectedPaperId);
     if (!paper) return;
 
-    const assignedSvg = paper.svg_id ? this.svgLibrary.find((s) => s.id === paper.svg_id) : null;
+    const isLocked = !!paper.locked;
+    const lockIcon = isLocked ? 'lock' : 'unlock';
+    const lockTitle = isLocked ? 'Unlock paper' : 'Lock paper';
 
     content.innerHTML = `
       <div class="form-group">
-        <label>Paper Size</label>
+        <div style="display: flex; align-items: center; justify-content: space-between;">
+          <label>Paper Size</label>
+          <button class="icon-btn" id="lock-paper-btn" title="${lockTitle}" style="color: ${isLocked ? 'var(--accent)' : 'inherit'}">
+            <i data-lucide="${lockIcon}" style="width: 14px; height: 14px;"></i>
+          </button>
+        </div>
         <div class="info-value" style="margin-top: 0.25rem">
           ${paper.paper_name || 'Custom'} (${paper.paper_width.toFixed(0)} × ${paper.paper_height.toFixed(0)}mm)
         </div>
@@ -917,7 +1215,7 @@ class PlotterStudio {
 
       <div class="form-group">
         <label>Assign SVG</label>
-        <select id="inspector-assign-svg" class="input-select" style="margin-top: 0.5rem">
+        <select id="inspector-assign-svg" class="input-select" style="margin-top: 0.5rem" ${isLocked ? 'disabled' : ''}>
           <option value="">None</option>
           ${this.svgLibrary.map(svg => `
             <option value="${svg.id}" ${paper.svg_id === svg.id ? 'selected' : ''}>
@@ -931,22 +1229,22 @@ class PlotterStudio {
         <label>Transform</label>
         <div class="transform-grid" style="margin-top: 0.5rem">
           <div class="input-group">
-            <input type="number" id="inspector-x" class="input-number" value="${paper.x ?? 0}" step="0.1" />
+            <input type="number" id="inspector-x" class="input-number" value="${paper.x ?? 0}" step="0.1" ${isLocked ? 'disabled' : ''} />
             <span class="input-unit">mm</span>
           </div>
           <div class="input-group">
-            <input type="number" id="inspector-y" class="input-number" value="${paper.y ?? 0}" step="0.1" />
+            <input type="number" id="inspector-y" class="input-number" value="${paper.y ?? 0}" step="0.1" ${isLocked ? 'disabled' : ''} />
             <span class="input-unit">mm</span>
           </div>
         </div>
         <div class="transform-grid" style="margin-top: 0.75rem">
           <div class="input-group">
-            <input type="number" id="inspector-rotation" class="input-number" value="${paper.rotation ?? 0}" step="90" />
+            <input type="number" id="inspector-rotation" class="input-number" value="${paper.rotation ?? 0}" step="90" ${isLocked ? 'disabled' : ''} />
             <span class="input-unit">°</span>
           </div>
           <div style="display: flex; gap: 0.5rem">
-            <button class="btn btn-secondary" id="rotate-left-btn" style="flex: 1">↺ Left</button>
-            <button class="btn btn-secondary" id="rotate-right-btn" style="flex: 1">↻ Right</button>
+            <button class="btn btn-secondary" id="rotate-left-btn" style="flex: 1" ${isLocked ? 'disabled' : ''}>↺ Left</button>
+            <button class="btn btn-secondary" id="rotate-right-btn" style="flex: 1" ${isLocked ? 'disabled' : ''}>↻ Right</button>
           </div>
         </div>
       </div>
@@ -956,6 +1254,11 @@ class PlotterStudio {
         <button class="btn btn-danger btn-full" id="remove-paper-inspector-btn">Remove Paper</button>
       </div>
     `;
+
+    // Lock toggle (Item 24)
+    document.getElementById('lock-paper-btn')?.addEventListener('click', () => {
+      this.togglePaperLock(this.selectedPaperId);
+    });
 
     // Event listeners for inspector controls
     const assignSelect = document.getElementById('inspector-assign-svg');
@@ -967,17 +1270,14 @@ class PlotterStudio {
     const yInput = document.getElementById('inspector-y');
     const rotationInput = document.getElementById('inspector-rotation');
 
-    xInput?.addEventListener('input', (e) => {
-      this.updatePaperPosition('x', e.target.value);
-    });
+    // Item 5: debounced input handlers
+    const debouncedX = this._debounce((v) => this.updatePaperPosition('x', v));
+    const debouncedY = this._debounce((v) => this.updatePaperPosition('y', v));
+    const debouncedR = this._debounce((v) => this.updatePaperRotation(Number(v)));
 
-    yInput?.addEventListener('input', (e) => {
-      this.updatePaperPosition('y', e.target.value);
-    });
-
-    rotationInput?.addEventListener('input', (e) => {
-      this.updatePaperRotation(Number(e.target.value));
-    });
+    xInput?.addEventListener('input', (e) => debouncedX(e.target.value));
+    yInput?.addEventListener('input', (e) => debouncedY(e.target.value));
+    rotationInput?.addEventListener('input', (e) => debouncedR(e.target.value));
 
     document.getElementById('rotate-left-btn')?.addEventListener('click', () => {
       this.rotateSelectedPaper(-90);
@@ -994,9 +1294,8 @@ class PlotterStudio {
     document.getElementById('remove-paper-inspector-btn')?.addEventListener('click', () => {
       this.removePaper(this.selectedPaperId);
     });
-    
-    // Reinitialize icons after DOM update
-    if (window.lucide) lucide.createIcons();
+
+    if (window.lucide) lucide.createIcons({ nodes: [content] });
   }
 
   async addSvg(file) {
@@ -1015,8 +1314,8 @@ class PlotterStudio {
       const entry = await this.prepareSvgLibraryEntry(svgData);
       this.svgLibrary.push(entry);
       this.updateSvgLibraryList();
-      this.updateInspector();
-      this.render();
+      this.refresh({ paperList: false });
+      showToast(`SVG added: ${svgData.filename}`);
     } catch (error) {
       console.error('Error adding SVG:', error);
       await showAlert('Error', 'Failed to add SVG: ' + error.message, 'error');
@@ -1099,11 +1398,11 @@ class PlotterStudio {
       const paper = await response.json();
       this.papers.push(paper);
       this.selectPaper(paper.id);
-      this.updatePaperList();
-      this.render();
+      this.refresh({ inspector: false });
 
       // Close modal and reset form
       this.closePaperModal();
+      showToast('Paper added');
     } catch (error) {
       console.error('Error adding paper:', error);
       await showAlert('Error', 'Failed to add paper: ' + error.message, 'error');
@@ -1123,10 +1422,11 @@ class PlotterStudio {
     if (heightInput) heightInput.value = '';
   }
 
-  async updatePaperPosition(axis, value) {
-    if (!this.selectedPaperId) return;
+  async updatePaperPosition(axis, value, paperId = null) {
+    const targetId = paperId || this.selectedPaperId;
+    if (!targetId) return;
 
-    const paper = this.papers.find((p) => p.id === this.selectedPaperId);
+    const paper = this.papers.find((p) => p.id === targetId);
     if (!paper) return;
 
     if (value === '' || value === null || value === undefined) return;
@@ -1195,6 +1495,23 @@ class PlotterStudio {
     await this.updatePaperRotation(newRotation);
   }
 
+  async togglePaperLock(paperId) {
+    const paper = this.papers.find(p => p.id === paperId);
+    if (!paper) return;
+    const newLocked = !paper.locked;
+    paper.locked = newLocked;
+    try {
+      await fetch('/api/update-paper', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: paperId, locked: newLocked }),
+      });
+    } catch (e) {
+      console.error('Error toggling lock:', e);
+    }
+    this.refresh();
+  }
+
   async assignSvgToPaper(svgId) {
     if (!this.selectedPaperId) return;
 
@@ -1236,8 +1553,8 @@ class PlotterStudio {
       const paper = await response.json();
       this.papers.push(paper);
       this.selectPaper(paper.id);
-      this.updatePaperList();
-      this.render();
+      this.refresh({ inspector: false });
+      showToast('Paper cloned');
     } catch (error) {
       console.error('Error cloning paper:', error);
       await showAlert('Error', 'Failed to clone paper: ' + error.message, 'error');
@@ -1266,9 +1583,8 @@ class PlotterStudio {
         }
       }
 
-      this.updatePaperList();
-      this.updateInspector();
-      this.render();
+      this.refresh();
+      showToast('Papers auto-arranged');
     } catch (error) {
       console.error('Auto-arrange error:', error);
       await showAlert('Error', 'Auto-arrange failed: ' + error.message, 'error');
@@ -1319,7 +1635,7 @@ class PlotterStudio {
 
   onMouseDown(event) {
     const point = this.getCanvasPoint(event);
-    
+
     if (this.activeTool === 'pan' || this.panning) {
       this.panning = true;
       this.dragStart = { x: event.clientX, y: event.clientY };
@@ -1331,20 +1647,59 @@ class PlotterStudio {
     const hitPaper = this.paperAtPoint(point);
 
     if (hitPaper) {
-      this.selectPaper(hitPaper.id);
-      this.dragging = true;
-      this.dragStart = point;
-      this.dragStartTransform = { x: hitPaper.x || 0, y: hitPaper.y || 0 };
-      event.preventDefault();
+      if (event.shiftKey) {
+        // Item 22: Shift+click adds/removes from multi-select
+        if (this.selectedPaperIds.has(hitPaper.id)) {
+          this.selectedPaperIds.delete(hitPaper.id);
+          if (this.selectedPaperId === hitPaper.id) {
+            this.selectedPaperId = this.selectedPaperIds.size > 0 ? [...this.selectedPaperIds][0] : null;
+          }
+        } else {
+          // Add current primary to set first
+          if (this.selectedPaperId) this.selectedPaperIds.add(this.selectedPaperId);
+          this.selectedPaperIds.add(hitPaper.id);
+          this.selectedPaperId = hitPaper.id;
+        }
+        this.refresh();
+      } else {
+        // Single click: clear multi-select, select this paper
+        if (!this.selectedPaperIds.has(hitPaper.id)) {
+          this.selectedPaperIds.clear();
+        }
+        this.selectPaper(hitPaper.id);
+      }
+
+      if (!hitPaper.locked) {
+        this.dragging = true;
+        this.dragStart = point;
+        this.dragStartTransform = { x: hitPaper.x || 0, y: hitPaper.y || 0 };
+        // Item 22: save start positions for all selected papers
+        this.dragStartPositions = {};
+        const idsToMove = this.selectedPaperIds.size > 0 ? [...this.selectedPaperIds] : [hitPaper.id];
+        for (const pid of idsToMove) {
+          const p = this.papers.find(pp => pp.id === pid);
+          if (p) this.dragStartPositions[pid] = { x: p.x || 0, y: p.y || 0 };
+        }
+        event.preventDefault();
+      }
     } else {
       this.selectedPaperId = null;
-      this.updatePaperList();
-      this.updateInspector();
-      this.render();
+      this.selectedPaperIds.clear();
+      this.refresh();
     }
   }
 
   onMouseMove(event) {
+    // Item 27: store last mouse event for zoom coordinate update
+    this.lastMouseEvent = event;
+
+    // Item 6: merged coordinate label update
+    const point = this.getCanvasPoint(event);
+    const mouseLabel = document.getElementById('mouse-position');
+    if (mouseLabel) {
+      mouseLabel.textContent = `${point.x.toFixed(1)}mm, ${point.y.toFixed(1)}mm`;
+    }
+
     if (this.panning) {
       const dx = event.clientX - this.dragStart.x;
       const dy = event.clientY - this.dragStart.y;
@@ -1356,17 +1711,31 @@ class PlotterStudio {
 
     if (!this.dragging || !this.selectedPaperId) return;
 
-    const point = this.getCanvasPoint(event);
     const paper = this.papers.find((p) => p.id === this.selectedPaperId);
     if (!paper) return;
 
     const dx = point.x - this.dragStart.x;
     const dy = point.y - this.dragStart.y;
 
-    paper.x = this.dragStartTransform.x + dx;
-    paper.y = this.dragStartTransform.y + dy;
+    // Item 22: move all selected papers together when dragging
+    const idsToMove = this.selectedPaperIds.size > 0 ? [...this.selectedPaperIds] : [this.selectedPaperId];
+    for (const pid of idsToMove) {
+      const p = this.papers.find(pp => pp.id === pid);
+      if (!p || p.locked) continue;
+      const startPos = this.dragStartPositions[pid];
+      if (!startPos) continue;
+      let newX = startPos.x + dx;
+      let newY = startPos.y + dy;
+      // Item 21: snap to grid
+      if (this.snapToGrid) {
+        newX = Math.round(newX / 10) * 10;
+        newY = Math.round(newY / 10) * 10;
+      }
+      p.x = newX;
+      p.y = newY;
+    }
 
-    // Update inspector inputs
+    // Update inspector inputs for primary selected paper
     const xInput = document.getElementById('inspector-x');
     const yInput = document.getElementById('inspector-y');
     if (xInput) xInput.value = paper.x.toFixed(1);
@@ -1383,15 +1752,20 @@ class PlotterStudio {
     }
 
     if (this.dragging && this.selectedPaperId) {
-      const paper = this.papers.find((p) => p.id === this.selectedPaperId);
-      if (paper) {
-        await this.updatePaperPosition('x', paper.x);
-        await this.updatePaperPosition('y', paper.y);
+      // Item 22: update all selected papers' positions
+      const idsToUpdate = this.selectedPaperIds.size > 0 ? [...this.selectedPaperIds] : [this.selectedPaperId];
+      for (const pid of idsToUpdate) {
+        const p = this.papers.find(pp => pp.id === pid);
+        if (p) {
+          await this.updatePaperPosition('x', p.x, pid);
+          await this.updatePaperPosition('y', p.y, pid);
+        }
       }
     }
 
     this.dragging = false;
     this.dragStartTransform = null;
+    this.dragStartPositions = {};
   }
 
   render() {
@@ -1416,10 +1790,19 @@ class PlotterStudio {
   }
 
   drawGrid() {
-    this.ctx.strokeStyle = '#e0e0e0';
-    this.ctx.lineWidth = 1;
-
     const gridSizePx = 10 * this.scale;
+
+    if (this.snapToGrid) {
+      // Item 21: prominent snap-to-grid lines (dotted, slightly more visible)
+      this.ctx.strokeStyle = 'rgba(100, 149, 237, 0.35)';
+      this.ctx.lineWidth = 1;
+      this.ctx.setLineDash([2, 4]);
+    } else {
+      this.ctx.strokeStyle = '#e0e0e0';
+      this.ctx.lineWidth = 1;
+      this.ctx.setLineDash([]);
+    }
+
     for (let x = 0; x <= this.canvasWidth * this.scale; x += gridSizePx) {
       this.ctx.beginPath();
       this.ctx.moveTo(x, 0);
@@ -1433,6 +1816,8 @@ class PlotterStudio {
       this.ctx.lineTo(this.canvas.width, y);
       this.ctx.stroke();
     }
+
+    this.ctx.setLineDash([]);
   }
 
   drawPaper(paper) {
@@ -1456,13 +1841,21 @@ class PlotterStudio {
     this.ctx.strokeRect(-width / 2, -height / 2, width, height);
     this.ctx.setLineDash([]);
 
-    // Selection highlight
-    if (paper.id === this.selectedPaperId) {
+    // Selection highlight (single or multi-select)
+    const isSelected = paper.id === this.selectedPaperId || this.selectedPaperIds.has(paper.id);
+    if (isSelected) {
       this.ctx.strokeStyle = '#00E5FF';
       this.ctx.lineWidth = 3 / this.scale;
       this.ctx.setLineDash([5 / this.scale, 5 / this.scale]);
       this.ctx.strokeRect(-width / 2, -height / 2, width, height);
       this.ctx.setLineDash([]);
+    }
+
+    // Lock icon indicator (Item 24)
+    if (paper.locked) {
+      this.ctx.fillStyle = 'rgba(255, 200, 0, 0.85)';
+      this.ctx.font = `${12 / this.canvasTransform.scale}px sans-serif`;
+      this.ctx.fillText('🔒', -width / 2 + 4, -height / 2 + 14 / this.canvasTransform.scale);
     }
 
     // SVG preview
@@ -1633,7 +2026,7 @@ class PlotterStudio {
       }
 
       const result = await response.json();
-      await showAlert('Export Successful', `Files saved to:\n${result.output_folder}`, 'success');
+      showToast(`Exported to: ${result.output_folder}`, 'success', 5000);
     } catch (error) {
       // Don't show error if user cancelled
       if (error.name === 'AbortError') {
@@ -1685,14 +2078,13 @@ class PlotterStudio {
       this.papers = [];
       this.svgLibrary = [];
       this.selectedPaperId = null;
+      this.selectedPaperIds.clear();
 
       // Update UI
-      this.updatePaperList();
       this.updateSvgLibraryList();
-      this.updateInspector();
-      this.render();
+      this.refresh();
 
-      await showAlert('Cleared', `Removed ${result.papers_removed} paper${result.papers_removed !== 1 ? 's' : ''} and ${result.svgs_removed} SVG${result.svgs_removed !== 1 ? 's' : ''}.`, 'success');
+      showToast(`Cleared ${result.papers_removed} paper${result.papers_removed !== 1 ? 's' : ''} and ${result.svgs_removed} SVG${result.svgs_removed !== 1 ? 's' : ''}`);
     } catch (error) {
       console.error('Error clearing all:', error);
       await showAlert('Error', 'Failed to clear all: ' + error.message, 'error');
@@ -1707,7 +2099,7 @@ class PlotterStudio {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-  new PlotterStudio();
+  const app = new PlotterStudio();
   // Initialize Lucide icons after app is loaded
   if (window.lucide) {
     lucide.createIcons();

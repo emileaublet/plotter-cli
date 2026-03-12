@@ -128,6 +128,36 @@
               <i data-lucide="layout-grid" class="icon" style="width: 16px; height: 16px;"></i>
               Auto-Arrange
             </button>
+            <!-- Alignment tools (Item 20) -->
+            <div style="margin-top: 0.75rem;">
+              <div style="font-size: 11px; color: var(--muted-foreground); margin-bottom: 0.4rem;">Align</div>
+              <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px;">
+                <button class="icon-btn tool-btn" data-align="align_left" title="Align Left">
+                  <i data-lucide="align-left" style="width: 14px; height: 14px;"></i>
+                </button>
+                <button class="icon-btn tool-btn" data-align="align_right" title="Align Right">
+                  <i data-lucide="align-right" style="width: 14px; height: 14px;"></i>
+                </button>
+                <button class="icon-btn tool-btn" data-align="align_top" title="Align Top">
+                  <i data-lucide="align-start-vertical" style="width: 14px; height: 14px;"></i>
+                </button>
+                <button class="icon-btn tool-btn" data-align="align_bottom" title="Align Bottom">
+                  <i data-lucide="align-end-vertical" style="width: 14px; height: 14px;"></i>
+                </button>
+                <button class="icon-btn tool-btn" data-align="center_h" title="Center Horizontally">
+                  <i data-lucide="align-center-horizontal" style="width: 14px; height: 14px;"></i>
+                </button>
+                <button class="icon-btn tool-btn" data-align="center_v" title="Center Vertically">
+                  <i data-lucide="align-center-vertical" style="width: 14px; height: 14px;"></i>
+                </button>
+                <button class="icon-btn tool-btn" data-align="distribute_h" title="Distribute Horizontally">
+                  <i data-lucide="space-x" style="width: 14px; height: 14px;"></i>
+                </button>
+                <button class="icon-btn tool-btn" data-align="distribute_v" title="Distribute Vertically">
+                  <i data-lucide="space-y" style="width: 14px; height: 14px;"></i>
+                </button>
+              </div>
+            </div>
           </div>
         </aside>
 
@@ -145,12 +175,36 @@
             </div>
             <div class="toolbar-divider"></div>
             <div class="toolbar-group">
+              <!-- Undo/Redo (Item 23) -->
+              <button id="undo-btn" class="tool-btn" title="Undo (Cmd+Z)" disabled>
+                <i data-lucide="undo-2" style="width: 16px; height: 16px;"></i>
+              </button>
+              <button id="redo-btn" class="tool-btn" title="Redo (Cmd+Shift+Z)" disabled>
+                <i data-lucide="redo-2" style="width: 16px; height: 16px;"></i>
+              </button>
+            </div>
+            <div class="toolbar-divider"></div>
+            <div class="toolbar-group">
+              <!-- Snap to Grid (Item 21) -->
+              <button id="snap-grid-btn" class="tool-btn" title="Snap to Grid">
+                <i data-lucide="grid-3x3" style="width: 16px; height: 16px;"></i>
+              </button>
+            </div>
+            <div class="toolbar-divider"></div>
+            <div class="toolbar-group">
               <button id="zoom-out-btn" class="tool-btn" title="Zoom Out">
                 <i data-lucide="zoom-out" style="width: 16px; height: 16px;"></i>
               </button>
               <span id="zoom-level" class="zoom-level" title="Click to reset view">100%</span>
               <button id="zoom-in-btn" class="tool-btn" title="Zoom In">
                 <i data-lucide="zoom-in" style="width: 16px; height: 16px;"></i>
+              </button>
+            </div>
+            <div class="toolbar-divider"></div>
+            <div class="toolbar-group">
+              <!-- Help (Item 26) -->
+              <button id="help-btn" class="tool-btn" title="Keyboard Shortcuts (?)">
+                <i data-lucide="keyboard" style="width: 16px; height: 16px;"></i>
               </button>
             </div>
           </div>
@@ -335,7 +389,44 @@
           </div>
         </div>
       </div>
+
+      <!-- Keyboard Shortcuts Help Modal (Item 26) -->
+      <div id="help-modal" class="modal">
+        <div class="modal-content" style="max-width: 480px;">
+          <div class="modal-header">
+            <h2>
+              <i data-lucide="keyboard" style="width: 18px; height: 18px; vertical-align: middle; margin-right: 6px;"></i>
+              Keyboard Shortcuts
+            </h2>
+            <button class="icon-btn" id="close-help-btn">
+              <i data-lucide="x" style="width: 16px; height: 16px;"></i>
+            </button>
+          </div>
+          <div class="modal-body" style="padding: 1rem 1.5rem;">
+            <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
+              <tbody>
+                <tr><td style="padding: 5px 8px; color: var(--muted-foreground);">V</td><td style="padding: 5px 8px;">Select tool</td></tr>
+                <tr><td style="padding: 5px 8px; color: var(--muted-foreground);">H</td><td style="padding: 5px 8px;">Pan tool</td></tr>
+                <tr><td style="padding: 5px 8px; color: var(--muted-foreground);">Delete / Backspace</td><td style="padding: 5px 8px;">Remove selected paper</td></tr>
+                <tr><td style="padding: 5px 8px; color: var(--muted-foreground);">←↑→↓</td><td style="padding: 5px 8px;">Nudge 1mm</td></tr>
+                <tr><td style="padding: 5px 8px; color: var(--muted-foreground);">Shift + ←↑→↓</td><td style="padding: 5px 8px;">Nudge 0.1mm</td></tr>
+                <tr><td style="padding: 5px 8px; color: var(--muted-foreground);">Shift + Click</td><td style="padding: 5px 8px;">Multi-select paper</td></tr>
+                <tr><td style="padding: 5px 8px; color: var(--muted-foreground);">Cmd/Ctrl + Z</td><td style="padding: 5px 8px;">Undo</td></tr>
+                <tr><td style="padding: 5px 8px; color: var(--muted-foreground);">Cmd/Ctrl + Shift + Z</td><td style="padding: 5px 8px;">Redo</td></tr>
+                <tr><td style="padding: 5px 8px; color: var(--muted-foreground);">Cmd/Ctrl + D</td><td style="padding: 5px 8px;">Clone selected paper</td></tr>
+                <tr><td style="padding: 5px 8px; color: var(--muted-foreground);">?</td><td style="padding: 5px 8px;">Show this help</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="modal-footer" style="padding: 0.75rem 1.5rem; border-top: 1px solid var(--border); display: flex; justify-content: flex-end;">
+            <button id="close-help-ok-btn" class="btn btn-primary" onclick="document.getElementById('help-modal').classList.remove('active')">Close</button>
+          </div>
+        </div>
+      </div>
     </div>
+
+    <!-- Toast container (Item 17) -->
+    <div id="toast-container" style="position: fixed; bottom: 24px; right: 24px; display: flex; flex-direction: column; gap: 8px; z-index: 9999; pointer-events: none;"></div>
 
     <script src="{{ url_for('static', filename='app.js') }}?v={{ cache_bust }}"></script>
     <script>

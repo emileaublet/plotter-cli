@@ -1,0 +1,105 @@
+# Plotter CLI — Claude Code Guide
+
+## Build & Install
+
+This project is installed globally via **pipx**. Always use this to apply code changes:
+
+```bash
+pipx install . --force
+```
+
+Do NOT use `pip install -e .` — the active install is the pipx global one.
+
+Verify:
+```bash
+plotter --help
+```
+
+## Project Overview
+
+CLI + desktop GUI ("Plotter Studio") for processing SVG files for pen plotters. Wraps **vpype** for path optimization and G-code generation.
+
+- `plotter <command>` — CLI tool
+- `plotter studio` — Launch native desktop GUI (Flask + pywebview)
+
+## Key Files
+
+| File | Purpose |
+|------|---------|
+| `plotter_cli/commands.py` | CLI commands (Typer) |
+| `plotter_cli/utils.py` | Settings, SVG parsing, G-code utils |
+| `plotter_cli/gui_app.py` | Flask routes + in-memory state |
+| `plotter_cli/gui_utils.py` | SVG combining, G-code export pipeline |
+| `plotter_cli/gcode_parser.py` | Z-height optimization for G-code |
+| `plotter_cli/settings.yaml` | Machine config + paper sizes |
+| `plotter_cli/.vpype.toml` | vpype G-code template |
+| `plotter_cli/gui/templates/index.html` | GUI HTML (2500+ lines) |
+| `plotter_cli/gui/static/app.js` | GUI JavaScript frontend |
+| `plotter_cli/gui/static/style.css` | GUI styles |
+
+## Architecture
+
+- **In-memory state**: `svg_library{}` and `paper_store{}` in `gui_app.py` — no persistence between sessions
+- **Coordinate systems**: GUI = top-left origin (Y down); Plotter = bottom-left origin (Y up). Conversion: `y_plotter = canvas_height - y_gui - height`
+- **vpype** is called via `subprocess` — must be installed separately (not in `pyproject.toml`)
+- **Settings load order**: `./settings.yaml` → `plotter_cli/settings.yaml` → hardcoded defaults
+- **Native window**: pywebview wraps Flask; Flask runs in a daemon thread
+
+## GUI API Routes
+
+All under `/api/`:
+- `POST /api/add-svg` — upload SVG
+- `POST /api/add-paper` — add paper to canvas
+- `POST /api/update-paper` — move/resize/rotate/assign SVG
+- `POST /api/auto-arrange` — auto-layout papers in a grid
+- `POST /api/clone-paper/<id>` — duplicate paper
+- `POST /api/export` — generate combined SVG + G-code output
+- `GET|PUT /api/settings` — read/write settings
+
+## G-code Pipeline
+
+1. SVGs combined into one file with transforms (translate, scale, rotate)
+2. Passed to vpype via subprocess with dynamic `.vpype.toml`
+3. `gcode_parser.py` post-processes: Z-height optimization (short travel ≤ threshold → `z_up_short`; long travel → `z_up_long`), removes registration layer
+4. Output split per color; files named `file#RRGGBB_colorname.gcode`
+
+## Settings (settings.yaml)
+
+All distances in mm:
+- `area_width` / `area_height` — plotter bed size
+- `z_up_long` / `z_up_short` / `z_up_threshold` — pen height optimization
+- `z_down` — pen-down position
+- `feed_rate_draw` / `feed_rate_travel` / `feed_rate_z` — speeds (mm/min)
+- `registration_marks_length` — corner mark size
+- `papers[]` — list of `{name, width, height}` in mm
+
+## Dimension Units
+
+Parser supports: `mm`, `cm`, `in`, `pt`, `pc`, `px` (unitless → px at 96dpi).
+
+## Dependencies
+
+```
+typer, questionary, rich       # CLI
+flask, pywebview               # GUI
+pyyaml                         # Settings
+cairosvg, pillow               # SVG→PNG preview
+vpype                          # External, must install separately
+```
+
+## No Tests
+
+No test framework is configured. No `tests/` directory exists.
+
+## Common Commands
+
+```bash
+plotter studio                  # Launch GUI
+plotter process drawing.svg     # Process single SVG (interactive)
+plotter check drawing.svg       # Check SVG dimensions
+plotter list                    # List paper sizes
+plotter general                 # Show machine settings
+plotter manage-papers           # Edit paper sizes interactively
+plotter generate-boundary       # Generate boundary G-code
+plotter calibrate               # Generate calibration spiral
+```

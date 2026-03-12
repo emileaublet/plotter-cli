@@ -3,14 +3,13 @@ Flask application for the Plotter GUI.
 Provides a web-based interface for arranging multiple SVGs on a canvas.
 """
 
+import math
 import os
 import time
 import json
 import platform
 import subprocess
 import tempfile
-import platform
-import subprocess
 import uuid
 from pathlib import Path
 from flask import Flask, render_template, request, jsonify, send_file
@@ -20,9 +19,11 @@ from .utils import (
     load_settings,
     save_settings,
     get_svg_dimensions,
+    validate_svg_dimensions,
     calculate_gcode_stats,
     estimate_draw_time,
     format_time,
+    format_distance,
 )
 from .gui_utils import (
     svg_to_png,
@@ -83,7 +84,6 @@ def allowed_file(filename):
 @app.route("/")
 def index():
     """Serve the main GUI page."""
-    import time
     cache_bust = str(int(time.time()))
     # Check if we're in frameless mode (passed as query param)
     frameless_mode = request.args.get('frameless', 'false').lower() == 'true'
@@ -216,10 +216,9 @@ def add_svg():
             )
 
         # Validate dimensions
-        if width <= 0 or height <= 0:
-            raise ValueError(f"Invalid SVG dimensions: {width}mm × {height}mm")
+        validate_svg_dimensions(width, height)
 
-        # Generate PNG preview
+        # Generate PNG preview once and cache the path
         try:
             png_path = svg_to_png(filepath)
         except Exception as e:
@@ -235,6 +234,7 @@ def add_svg():
             "id": svg_id,
             "filename": filename,
             "filepath": filepath,
+            "preview_png_path": png_path,  # Cached PNG path
             "width": width,
             "height": height,
             "paper_width": width,  # Default to SVG dimensions
@@ -276,7 +276,19 @@ def get_svg_preview(svg_id):
     try:
         svg_data = svg_library[svg_id]
         filepath = svg_data["filepath"]
-        png_path = svg_to_png(filepath)
+
+        # Use cached PNG path; regenerate only if missing from disk
+        png_path = svg_data.get("preview_png_path")
+        if png_path and os.path.exists(png_path):
+            return send_file(png_path, mimetype="image/png")
+
+        # Cache miss: regenerate and store
+        try:
+            png_path = svg_to_png(filepath)
+            svg_data["preview_png_path"] = png_path
+        except Exception as e:
+            print(f"Warning: Failed to regenerate PNG preview for {filepath}: {e}")
+            png_path = None
 
         if png_path and os.path.exists(png_path):
             return send_file(png_path, mimetype="image/png")
@@ -385,6 +397,8 @@ def update_paper():
 
     if "rotation" in data:
         paper_data["rotation"] = int(data["rotation"])
+    if "locked" in data:
+        paper_data["locked"] = bool(data["locked"])
     return jsonify({"success": True, "paper": paper_data})
 
 
@@ -469,6 +483,7 @@ def list_papers():
             "x": paper_data["x"],
             "y": paper_data["y"],
             "rotation": paper_data.get("rotation", 0),
+            "locked": paper_data.get("locked", False),
         }
         # Include SVG info if assigned
         if paper_data.get("svg_id"):
@@ -553,19 +568,12 @@ def remove_svg(svg_id):
 
     # Clean up files
     try:
-        # Get PNG path before deleting SVG file
-        png_path = None
-        if os.path.exists(filepath):
-            try:
-                png_path = svg_to_png(filepath)
-            except Exception:
-                pass  # PNG path generation might fail
-        
         # Delete SVG file
         if os.path.exists(filepath):
             os.remove(filepath)
-        
-        # Delete PNG preview if it exists
+
+        # Delete cached PNG preview if it exists
+        png_path = svg_data.get("preview_png_path")
         if png_path and os.path.exists(png_path):
             os.remove(png_path)
     except Exception:
@@ -592,15 +600,15 @@ def clear_all():
         if filepath and os.path.exists(filepath):
             try:
                 os.remove(filepath)
-                # Try to remove PNG preview
-                try:
-                    png_path = svg_to_png(filepath)
-                    if png_path and os.path.exists(png_path):
-                        os.remove(png_path)
-                except Exception:
-                    pass
             except Exception:
                 pass  # Ignore cleanup errors
+        # Remove cached PNG preview
+        png_path = svg_data.get("preview_png_path")
+        if png_path and os.path.exists(png_path):
+            try:
+                os.remove(png_path)
+            except Exception:
+                pass
     
     # Clear all data
     paper_store.clear()
@@ -745,35 +753,42 @@ def generate_stats_file(
     
     # Print per-color stats - Distance table
     lines.append("Distance Statistics:")
-    lines.append(f"{'Color':<20} {'Travel (mm)':>15} {'Draw (mm)':>15} {'Total (mm)':>15}")
-    lines.append("-" * 60)
+    lines.append(f"{'Color':<20} {'Travel':>20} {'Draw':>20} {'Total':>20}")
+    lines.append("-" * 80)
     
     for stat in color_stats:
         color_display = f"{stat['color_name']} (#{stat['hex_code']})"
+        travel_str = format_distance(stat['travel_mm'])
+        draw_str = format_distance(stat['draw_mm'])
+        total_str = format_distance(stat['total_mm'])
         lines.append(
-            f"{color_display:<20} {stat['travel_mm']:>15.2f} "
-            f"{stat['draw_mm']:>15.2f} {stat['total_mm']:>15.2f}"
+            f"{color_display:<20} {travel_str:>20} {draw_str:>20} {total_str:>20}"
         )
     
-    lines.append("-" * 60)
-    lines.append(f"{'TOTAL':<20} {total_travel_mm:>15.2f} {total_draw_mm:>15.2f} {total_travel_mm + total_draw_mm:>15.2f}")
+    lines.append("-" * 80)
+    total_travel_str = format_distance(total_travel_mm)
+    total_draw_str = format_distance(total_draw_mm)
+    total_distance_str = format_distance(total_travel_mm + total_draw_mm)
+    lines.append(f"{'TOTAL':<20} {total_travel_str:>20} {total_draw_str:>20} {total_distance_str:>20}")
     lines.append("")
     
     # Print per-color stats - Pen operations
     lines.append("Pen Operations:")
-    lines.append(f"{'Color':<20} {'Pen Lifts':>15} {'Segments':>15} {'Avg Seg (mm)':>15}")
-    lines.append("-" * 60)
+    lines.append(f"{'Color':<20} {'Pen Lifts':>15} {'Segments':>15} {'Avg Seg':>20}")
+    lines.append("-" * 70)
     
     for stat in color_stats:
         color_display = f"{stat['color_name']} (#{stat['hex_code']})"
+        avg_seg_str = format_distance(stat['avg_segment_length'])
         lines.append(
             f"{color_display:<20} {stat['pen_lifts']:>15} "
-            f"{stat['segments']:>15} {stat['avg_segment_length']:>15.2f}"
+            f"{stat['segments']:>15} {avg_seg_str:>20}"
         )
     
-    lines.append("-" * 60)
+    lines.append("-" * 70)
     avg_segment_length_total = total_draw_mm / total_segments if total_segments > 0 else 0.0
-    lines.append(f"{'TOTAL':<20} {total_pen_lifts:>15} {total_segments:>15} {avg_segment_length_total:>15.2f}")
+    avg_seg_total_str = format_distance(avg_segment_length_total)
+    lines.append(f"{'TOTAL':<20} {total_pen_lifts:>15} {total_segments:>15} {avg_seg_total_str:>20}")
     lines.append("")
     
     # Print per-color stats - Time estimates
@@ -798,11 +813,11 @@ def generate_stats_file(
     lines.append(f"Total Colors: {len(color_stats)}")
     lines.append(f"Total Pen Lifts: {total_pen_lifts}")
     lines.append(f"Total Segments: {total_segments}")
-    lines.append(f"Total Travel Distance: {total_travel_mm:.2f}mm")
-    lines.append(f"Total Draw Distance: {total_draw_mm:.2f}mm")
-    lines.append(f"Total Distance: {total_travel_mm + total_draw_mm:.2f}mm")
+    lines.append(f"Total Travel Distance: {format_distance(total_travel_mm)}")
+    lines.append(f"Total Draw Distance: {format_distance(total_draw_mm)}")
+    lines.append(f"Total Distance: {format_distance(total_travel_mm + total_draw_mm)}")
     if total_segments > 0:
-        lines.append(f"Average Segment Length: {avg_segment_length_total:.2f}mm")
+        lines.append(f"Average Segment Length: {format_distance(avg_segment_length_total)}")
     lines.append(f"Estimated Total Time: {total_time_str}")
     lines.append("")
     lines.append("=" * 60)
@@ -831,30 +846,204 @@ def auto_arrange():
         paper["x"] = (canvas_width - paper["paper_width"]) / 2
         paper["y"] = (canvas_height - paper["paper_height"]) / 2
     else:
-        # Arrange multiple papers in a row, centered
-        total_width = 0
-        max_height = 0
+        n = len(papers)
+        max_paper_w = max(p["paper_width"] for p in papers)
+        max_paper_h = max(p["paper_height"] for p in papers)
 
-        for paper in papers:
-            total_width += paper["paper_width"]
-            if paper["paper_height"] > max_height:
-                max_height = paper["paper_height"]
+        # Try a single row first; fall back to a grid if it doesn't fit.
+        row_w = n * max_paper_w + (n - 1) * gap
+        if row_w <= canvas_width and max_paper_h <= canvas_height:
+            cols = n
+        else:
+            # Find the grid closest to the canvas aspect ratio that fits.
+            canvas_ratio = canvas_width / canvas_height if canvas_height else 1.0
+            best_cols = 1
+            best_score = float("inf")
+            for c in range(1, n + 1):
+                r = math.ceil(n / c)
+                layout_w = c * max_paper_w + (c - 1) * gap
+                layout_h = r * max_paper_h + (r - 1) * gap
+                if layout_w > canvas_width or layout_h > canvas_height:
+                    continue
+                score = abs((layout_w / layout_h if layout_h else 1.0) - canvas_ratio)
+                if score < best_score:
+                    best_score = score
+                    best_cols = c
+            cols = best_cols
 
-        # Add gaps
-        total_width += gap * (len(papers) - 1)
+        rows = math.ceil(n / cols)
+        total_w = cols * max_paper_w + (cols - 1) * gap
+        total_h = rows * max_paper_h + (rows - 1) * gap
+        start_x = (canvas_width - total_w) / 2
+        start_y = (canvas_height - total_h) / 2
 
-        # Calculate starting X position to center the group
-        start_x = (canvas_width - total_width) / 2
-        start_y = (canvas_height - max_height) / 2
-
-        # Position each paper
-        current_x = start_x
-        for paper in papers:
-            paper["x"] = current_x
-            paper["y"] = start_y
-            current_x += paper["paper_width"] + gap
+        for i, paper in enumerate(papers):
+            col = i % cols
+            row = i // cols
+            paper["x"] = start_x + col * (max_paper_w + gap)
+            paper["y"] = start_y + row * (max_paper_h + gap)
 
     return jsonify({"success": True, "papers": list(paper_store.values())})
+
+
+@app.route("/api/align-papers", methods=["POST"])
+def align_papers():
+    """Align/distribute papers relative to their bounding box."""
+    data = request.json
+    action = data.get("action")
+    paper_ids = data.get("paper_ids", [])
+
+    # Use specified papers or all papers
+    if paper_ids:
+        papers = [paper_store[pid] for pid in paper_ids if pid in paper_store]
+    else:
+        papers = list(paper_store.values())
+
+    if not papers:
+        return jsonify({"error": "No papers to align"}), 400
+
+    if len(papers) < 2 and action in ("distribute_h", "distribute_v"):
+        return jsonify({"error": "Need at least 2 papers to distribute"}), 400
+
+    # Calculate bounding box of all selected papers
+    min_x = min(p["x"] for p in papers)
+    min_y = min(p["y"] for p in papers)
+    max_x = max(p["x"] + p["paper_width"] for p in papers)
+    max_y = max(p["y"] + p["paper_height"] for p in papers)
+    bbox_width = max_x - min_x
+    bbox_height = max_y - min_y
+
+    if action == "align_left":
+        for p in papers:
+            p["x"] = min_x
+    elif action == "align_right":
+        for p in papers:
+            p["x"] = max_x - p["paper_width"]
+    elif action == "align_top":
+        for p in papers:
+            p["y"] = min_y
+    elif action == "align_bottom":
+        for p in papers:
+            p["y"] = max_y - p["paper_height"]
+    elif action == "center_h":
+        center_x = (min_x + max_x) / 2
+        for p in papers:
+            p["x"] = center_x - p["paper_width"] / 2
+    elif action == "center_v":
+        center_y = (min_y + max_y) / 2
+        for p in papers:
+            p["y"] = center_y - p["paper_height"] / 2
+    elif action == "distribute_h":
+        papers_sorted = sorted(papers, key=lambda p: p["x"])
+        total_paper_w = sum(p["paper_width"] for p in papers_sorted)
+        gap = (bbox_width - total_paper_w) / (len(papers_sorted) - 1) if len(papers_sorted) > 1 else 0
+        cursor = min_x
+        for p in papers_sorted:
+            p["x"] = cursor
+            cursor += p["paper_width"] + gap
+    elif action == "distribute_v":
+        papers_sorted = sorted(papers, key=lambda p: p["y"])
+        total_paper_h = sum(p["paper_height"] for p in papers_sorted)
+        gap = (bbox_height - total_paper_h) / (len(papers_sorted) - 1) if len(papers_sorted) > 1 else 0
+        cursor = min_y
+        for p in papers_sorted:
+            p["y"] = cursor
+            cursor += p["paper_height"] + gap
+    else:
+        return jsonify({"error": f"Unknown action: {action}"}), 400
+
+    return jsonify({"success": True, "papers": list(paper_store.values())})
+
+
+@app.route("/api/bulk-update-papers", methods=["POST"])
+def bulk_update_papers():
+    """Bulk update paper positions/rotations (used for undo/redo)."""
+    data = request.json
+    papers_data = data.get("papers", [])
+
+    for paper_update in papers_data:
+        paper_id = paper_update.get("id")
+        if paper_id not in paper_store:
+            continue
+        paper = paper_store[paper_id]
+        if "x" in paper_update:
+            paper["x"] = float(paper_update["x"])
+        if "y" in paper_update:
+            paper["y"] = float(paper_update["y"])
+        if "rotation" in paper_update:
+            paper["rotation"] = int(paper_update["rotation"])
+        if "svg_id" in paper_update:
+            paper["svg_id"] = paper_update["svg_id"]
+        if "locked" in paper_update:
+            paper["locked"] = bool(paper_update["locked"])
+
+    return jsonify({"success": True, "papers": list(paper_store.values())})
+
+
+def _validate_export_papers():
+    """Build export list from papers with assigned SVGs. Returns list of export entries or raises."""
+    export_svgs = []
+    for paper in paper_store.values():
+        svg_id = paper.get("svg_id")
+        if not svg_id:
+            continue
+        svg_data = svg_library.get(svg_id)
+        if not svg_data:
+            continue
+        export_entry = {
+            **svg_data,
+            "x": paper.get("x", 0),
+            "y": paper.get("y", 0),
+            "paper_width": paper.get("paper_width", svg_data.get("width", 0)),
+            "paper_height": paper.get("paper_height", svg_data.get("height", 0)),
+            "paper_name": paper.get("paper_name"),
+            "svg_scale": paper.get("svg_scale", 1.0),
+            "rotation": paper.get("rotation", 0),
+        }
+        export_svgs.append(export_entry)
+    return export_svgs
+
+
+def _run_export_pipeline(export_svgs, output_folder, settings):
+    """Run SVG combine + gcode pipeline. Returns dict with file paths."""
+    canvas_width = settings["general"]["area_width"]
+    canvas_height = settings["general"]["area_height"]
+
+    print(f"EXPORT: Combining {len(export_svgs)} SVG(s) into combined.svg...")
+    combined_svg_path = os.path.join(output_folder, "combined.svg")
+    generate_combined_svg(export_svgs, canvas_width, canvas_height, combined_svg_path)
+
+    print(f"EXPORT: Running vpype to generate G-code...")
+    gcode_files = process_svg_to_gcode(
+        combined_svg_path, canvas_width, canvas_height, output_folder
+    )
+
+    print(f"EXPORT: Generating guide G-code...")
+    guide_gcode_path = os.path.join(output_folder, "guide.gcode")
+    generate_guide_gcode(list(paper_store.values()), guide_gcode_path, settings)
+
+    print(f"EXPORT: Generating stats.txt...")
+    stats_path = os.path.join(output_folder, "stats.txt")
+    generate_stats_file(stats_path, export_svgs, gcode_files, canvas_width, canvas_height)
+
+    return {
+        "combined_svg": combined_svg_path,
+        "gcode_files": gcode_files,
+        "guide_gcode": guide_gcode_path,
+        "stats": stats_path,
+    }
+
+
+def _build_export_response(output_folder, pipeline_result):
+    """Build the JSON response dict for a successful export."""
+    return {
+        "success": True,
+        "output_folder": output_folder,
+        "combined_svg": pipeline_result["combined_svg"],
+        "gcode_files": pipeline_result["gcode_files"],
+        "guide_gcode": pipeline_result["guide_gcode"],
+        "stats": pipeline_result["stats"],
+    }
 
 
 @app.route("/api/export", methods=["POST"])
@@ -869,85 +1058,26 @@ def export():
     # Log output location
     print(f"\n{'='*60}")
     print(f"EXPORT: Output folder: {output_folder}")
-    print(f"{'='*60}\n")
+    print(f"{'='*60}")
 
     try:
-        # Build export list from papers with assigned SVGs
-        export_svgs = []
-        paper_count = 0
-        
-        for paper in paper_store.values():
-            svg_id = paper.get("svg_id")
-            if not svg_id:
-                continue
-            svg_data = svg_library.get(svg_id)
-            if not svg_data:
-                continue
-
-            paper_count += 1
-            export_entry = {
-                **svg_data,
-                "x": paper.get("x", 0),
-                "y": paper.get("y", 0),
-                "paper_width": paper.get("paper_width", svg_data.get("width", 0)),
-                "paper_height": paper.get("paper_height", svg_data.get("height", 0)),
-                "paper_name": paper.get("paper_name"),
-                "svg_scale": paper.get("svg_scale", 1.0),
-                "rotation": paper.get("rotation", 0),
-            }
-            export_svgs.append(export_entry)
-
+        export_svgs = _validate_export_papers()
         if not export_svgs:
             return jsonify({"error": "No assigned SVGs to export"}), 400
 
         settings = load_settings()
-        canvas_width = settings["general"]["area_width"]
-        canvas_height = settings["general"]["area_height"]
-
-        # Generate combined SVG
-        combined_svg_path = os.path.join(output_folder, "combined.svg")
-        generate_combined_svg(
-            export_svgs, canvas_width, canvas_height, combined_svg_path
-        )
-
-        # Generate G-code files (one per color)
-        gcode_files = process_svg_to_gcode(
-            combined_svg_path, canvas_width, canvas_height, output_folder
-        )
-
-        # Generate guide G-code
-        guide_gcode_path = os.path.join(output_folder, "guide.gcode")
-        generate_guide_gcode(list(paper_store.values()), guide_gcode_path, settings)
-
-        # Generate stats.txt file
-        stats_path = os.path.join(output_folder, "stats.txt")
-        generate_stats_file(
-            stats_path,
-            export_svgs,
-            gcode_files,
-            canvas_width,
-            canvas_height
-        )
+        pipeline_result = _run_export_pipeline(export_svgs, output_folder, settings)
 
         # Log all generated files
         print(f"EXPORT: Generated files:")
-        print(f"  - Combined SVG: {combined_svg_path}")
-        print(f"  - Guide G-code: {guide_gcode_path}")
-        print(f"  - Stats: {stats_path}")
-        for gcode_file in gcode_files:
+        print(f"  - Combined SVG: {pipeline_result['combined_svg']}")
+        print(f"  - Guide G-code: {pipeline_result['guide_gcode']}")
+        print(f"  - Stats: {pipeline_result['stats']}")
+        for gcode_file in pipeline_result["gcode_files"]:
             print(f"  - G-code: {gcode_file}")
         print(f"{'='*60}\n")
 
-        return jsonify(
-            {
-                "success": True,
-                "output_folder": output_folder,
-                "combined_svg": combined_svg_path,
-                "gcode_files": gcode_files,
-                "guide_gcode": guide_gcode_path,
-                "stats": stats_path,
-            }
-        )
+        return jsonify(_build_export_response(output_folder, pipeline_result))
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -991,7 +1121,6 @@ def run_gui(
             server_thread.start()
             
             # Wait a moment for server to start
-            import time
             time.sleep(0.5)
             
             # Create native window

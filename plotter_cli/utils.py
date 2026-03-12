@@ -1,3 +1,4 @@
+import copy
 import yaml
 import xml.etree.ElementTree as ET
 import importlib.resources
@@ -5,23 +6,53 @@ import re
 import os
 
 
+# Module-level settings cache
+_settings_cache = None
+_settings_cache_path = None
+
+
 # Load settings from the YAML file
 def load_settings():
-    # Try to load from current directory first
+    global _settings_cache, _settings_cache_path
+
+    # Determine which settings file would be used
+    if os.path.exists("settings.yaml"):
+        candidate_path = os.path.abspath("settings.yaml")
+    else:
+        module_settings = os.path.join(os.path.dirname(__file__), "settings.yaml")
+        if os.path.exists(module_settings):
+            candidate_path = os.path.abspath(module_settings)
+        else:
+            candidate_path = None
+
+    # Return cached value if it's for the same path
+    if _settings_cache is not None and candidate_path == _settings_cache_path:
+        return copy.deepcopy(_settings_cache)
+
+    # Load fresh from disk
     if os.path.exists("settings.yaml"):
         with open("settings.yaml", "r") as file:
-            return yaml.safe_load(file)
+            settings = yaml.safe_load(file)
+        _settings_cache = settings
+        _settings_cache_path = candidate_path
+        return copy.deepcopy(settings)
 
     # Try to load from the module directory (preferred for development/source access)
     module_settings = os.path.join(os.path.dirname(__file__), "settings.yaml")
     if os.path.exists(module_settings):
         with open(module_settings, "r") as file:
-            return yaml.safe_load(file)
+            settings = yaml.safe_load(file)
+        _settings_cache = settings
+        _settings_cache_path = candidate_path
+        return copy.deepcopy(settings)
 
     # Fallback to package resources
     try:
         with importlib.resources.open_text("plotter_cli", "settings.yaml") as file:
-            return yaml.safe_load(file)
+            settings = yaml.safe_load(file)
+        _settings_cache = settings
+        _settings_cache_path = None
+        return copy.deepcopy(settings)
     except FileNotFoundError:
         # If all else fails, return a default structure
         return {
@@ -59,24 +90,30 @@ def get_settings_file_path():
 def save_settings(settings):
     """
     Save settings to the YAML file.
-    
+
     Args:
         settings: Dictionary containing settings to save (must include 'general' and 'papers' keys)
-    
+
     Returns:
         str: Path to the saved settings file
     """
+    global _settings_cache, _settings_cache_path
+
     settings_path = get_settings_file_path()
-    
+
     # Ensure directory exists (only if path has a directory component)
     dir_path = os.path.dirname(settings_path)
     if dir_path:
         os.makedirs(dir_path, exist_ok=True)
-    
+
     # Write settings to file
     with open(settings_path, "w", encoding="utf-8") as file:
         yaml.dump(settings, file, default_flow_style=False, sort_keys=False, allow_unicode=True)
-    
+
+    # Invalidate cache so the next load reads fresh data
+    _settings_cache = None
+    _settings_cache_path = None
+
     return settings_path
 
 
@@ -506,18 +543,37 @@ def calculate_gcode_stats(file_path: str) -> dict:
                 if "; --- Start Line" in line.upper() or "; --- START LINE" in line:
                     stats["num_segments"] += 1
 
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"Warning: Failed to parse gcode stats from {file_path}: {e}")
 
     return stats
 
 
+def validate_svg_dimensions(width: float, height: float) -> None:
+    """
+    Validate SVG dimensions, raising ValueError if either is zero or negative.
+
+    Args:
+        width: SVG width in mm
+        height: SVG height in mm
+
+    Raises:
+        ValueError: If width or height is <= 0
+    """
+    if width <= 0 or height <= 0:
+        raise ValueError(f"Invalid SVG dimensions: {width}mm × {height}mm")
+
+
 def format_distance(mm: float) -> str:
-    """Format distance in mm to human-readable format."""
-    if mm >= 1000:
-        return f"{mm / 1000:.2f}m"
+    """
+    Format distance in mm to human-readable format.
+    Uses mm for values < 1km (1,000,000mm), and km for values >= 1km.
+    """
+    if mm < 1_000_000:
+        return f"{mm:.2f}mm"
     else:
-        return f"{mm:.0f}mm"
+        km = mm / 1_000_000  # Convert mm to km (1 km = 1,000,000 mm)
+        return f"{km:.4f}km"
 
 
 def format_time(minutes: float) -> str:
