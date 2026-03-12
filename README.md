@@ -1,243 +1,230 @@
 # Plotter CLI
 
-This project provides a command-line interface (CLI) and native desktop GUI (Plotter Studio) for processing SVG files for plotting, managing paper sizes, and generating calibration files. It wraps `vpype` to provide a machine-specific pipeline.
+A command-line tool and native desktop GUI (**Plotter Studio**) for processing SVG files for pen plotters. Wraps `vpype` for path optimization and G-code generation.
 
-Plotter Studio features a modern, dark-themed interface that runs as a native desktop application (or in a browser). The GUI allows you to visually arrange multiple SVGs on a canvas, transform them (move, scale, rotate), and export to G-code with paper placement guides and detailed statistics.
+Plotter Studio is a dark-themed desktop application for visually arranging multiple SVGs on a canvas, transforming them (move, scale, rotate), and exporting to G-code with paper placement guides and detailed statistics.
 
 ## Installation
 
-### Recommended: Editable Install (for Development)
-Since this tool relies on local configuration (like `settings.yaml`), it is best installed in a virtual environment in editable mode. This ensures changes to the code or settings are immediately reflected.
+This tool is installed globally via **pipx**:
 
-1. Create and activate a virtual environment:
-   ```bash
-   python3 -m venv .venv
-   source .venv/bin/activate
-   ```
-
-2. Install the package in editable mode:
-   ```bash
-   pip install -e .
-   ```
-
-3. Run the plotter:
-   ```bash
-   plotter --help
-   ```
-
-### Global Install (pipx)
-If you want to use the tool globally without activating a virtual environment, `pipx` is recommended.
-
-**Fresh Install:**
 ```bash
 pipx install .
 ```
 
-**Apply Updates:**
-If you change the code or settings, you must force a reinstall to see changes:
+To apply code changes after editing:
+
 ```bash
 pipx install . --force
 ```
 
+Verify:
+
+```bash
+plotter --help
+```
+
+> `vpype` must be installed separately — it is not included in `pyproject.toml`.
+
 ## Configuration
 
 The tool uses a `settings.yaml` file to define machine dimensions, feed rates, and paper sizes. It looks for this file in the following order:
+
 1. Current working directory (`./settings.yaml`)
 2. Package installation directory (`plotter_cli/settings.yaml`)
 3. Hardcoded defaults
 
-### Default Machine Settings
-- **Area**: 880mm x 470mm
+### Machine Settings
+
+- **Area**: 880mm × 470mm
 - **Units**: Metric (mm)
 - **Feed Rates**: Configurable draw, travel, and Z-axis feed rates
 
 ### Paper Sizes
+
 - Predefined paper sizes (A4, Letter, etc.) can be managed via `plotter manage-papers`
-- Custom paper sizes can be added directly in Plotter Studio GUI
+- Custom paper sizes can be added directly in Plotter Studio
 - Papers can be specified in millimeters (whole numbers) or inches (decimals)
 
 ## Usage
 
-Run the CLI with the following command:
 ```bash
 plotter [OPTIONS] COMMAND [ARGS]
 ```
 
-### Key Commands
+### Commands
 
-- **`studio`**: Launch the Plotter Studio GUI for visual arrangement of multiple SVGs.
-  - usage: `plotter studio [OPTIONS]`
-  - options:
-    - `--host` / `-h`: Host to bind the server to (default: 127.0.0.1)
-    - `--port` / `-p`: Port to bind the server to (default: 5000)
-    - `--debug`: Enable debug mode
-    - `--native` / `--browser`: Open in native window (default) or browser
-    - `--frameless` / `--titlebar`: Remove title bar for frameless window (default: frameless)
-    - `--vibrancy` / `--no-vibrancy`: Enable macOS vibrancy effect (default: enabled, macOS only)
-  - Opens a native desktop application (or browser) where you can:
-    - Add multiple SVG files to a canvas
-    - Add custom-sized papers (in mm or inches)
-    - Move, scale, and rotate papers visually with precise controls
-    - Arrange papers on a canvas matching your plotter area (880mm × 470mm)
-    - Use pan and zoom tools for navigation
-    - Export to combined SVG and G-code files
-    - Generate a guide G-code file with paper boundaries for placement
-    - View detailed export statistics (stats.txt) with distance, pen lifts, and time estimates
-- **`process`**: Prepare an SVG for plotting.
-  - usage: `plotter process my_drawing.svg`
-  - options:
-    - `--no-flip`: Disable path flipping optimization (useful for some pens/brushes).
-    - `--imperial` / `-i`: Use inches for output prompts.
-- **`check`**: Verify if an SVG fits within defined paper sizes.
-- **`list`**: List all configured paper sizes.
-- **`general`**: Show current machine settings (Area, Feed Rates).
-- **`generate-boundary`**: Create a G-code file to draw the boundary of a specific paper size (useful for framing).
-- **`calibrate`**: Generate a calibration pattern.
-- **`manage-papers`**: Interactive wizard to add/edit/remove paper presets.
+| Command | Description |
+|---------|-------------|
+| `studio` | Launch Plotter Studio GUI |
+| `process <file.svg>` | Prepare an SVG for plotting (scale, center, optimize) |
+| `check <file.svg>` | Verify if an SVG fits within a paper size |
+| `list` | List all configured paper sizes |
+| `general` | Show current machine settings |
+| `generate-boundary` | Generate G-code to draw the boundary of a paper size |
+| `calibrate` | Generate a calibration spiral pattern |
+| `manage-papers` | Interactive wizard to add/edit/remove paper presets |
 
-### Example Workflow
+### `studio` options
 
-#### Single SVG Processing
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--host` / `-h` | `127.0.0.1` | Host to bind the server to |
+| `--port` / `-p` | `5000` | Port to bind the server to |
+| `--debug` | off | Enable Flask debug mode |
+| `--native` / `--browser` | native | Open in native window or browser |
+| `--frameless` / `--titlebar` | frameless | Frameless or standard title bar |
+| `--vibrancy` / `--no-vibrancy` | vibrancy | macOS vibrancy effect (macOS only) |
 
-1. **Check dimensions**:
-   ```bash
-   plotter check drawing.svg
-   ```
-2. **Process file** (Scaling, centering, and optimizing):
-   ```bash
-   plotter process drawing.svg
-   ```
-3. **Verify settings**:
-   ```bash
-   plotter general
-   ```
+### `process` options
 
-#### Multiple SVG Arrangement (Studio)
+| Option | Description |
+|--------|-------------|
+| `--no-flip` | Disable path flipping optimization |
+| `--imperial` / `-i` | Use inches for output prompts |
 
-1. **Launch Plotter Studio**:
-   ```bash
-   plotter studio
-   ```
-   By default, this opens a native desktop window with frameless mode and macOS vibrancy. To use a browser instead:
-   ```bash
-   plotter studio --browser
-   ```
+## Plotter Studio Workflow
 
-2. **Add Papers**: 
-   - Click "Add Paper" to add a paper to the canvas
-   - Choose from preset sizes or select "Custom Size..." for custom dimensions
-   - Custom sizes can be specified in millimeters (whole numbers) or inches (decimals)
+### 1. Launch
 
-3. **Add SVGs**: 
-   - Click "Choose SVG File" in the SVG Library section
-   - Assign SVGs to papers by selecting a paper and choosing an SVG from the library
+```bash
+plotter studio
+```
 
-4. **Arrange Papers**:
-   - **Select Tool (V)**: Click a paper to select it, then:
-     - Drag to move
-     - Use corner handles to scale
-     - Use top handle to rotate
-     - Use the Inspector panel for precise numeric control (position, scale, rotation)
-   - **Pan Tool (H)**: Click and drag to pan the canvas view
-   - **Zoom**: Use zoom controls or click the zoom percentage to reset view
-   - **Auto-arrange**: Click "Arrange" to automatically arrange all papers
+Opens a native desktop window in frameless mode with macOS vibrancy. To use the browser instead:
 
-5. **Export**: 
-   - Click "Export" to generate files
-   - You'll be prompted to select an output folder (or leave empty for temp folder)
-   - If any papers are outside the canvas boundaries, you'll receive a warning
-   - Export generates:
-     - **Combined SVG** with all arranged elements
-     - **G-code files** (one per color layer, named with color information)
-     - **Guide G-code** file with paper boundaries for placement
-     - **stats.txt** file with detailed export statistics:
-       - Operations summary (papers, SVGs, transformations)
-       - Distance statistics by color (travel, draw, total in mm)
-       - Pen operations (pen lifts, segments, average segment length)
-       - Estimated time by color and total
+```bash
+plotter studio --browser
+```
 
-6. **Other Features**:
-   - **Clear All**: Remove all papers and SVGs (with confirmation)
-   - **Delete SVG**: Remove an SVG from the library (removes associated papers with confirmation)
-   - **Fullscreen**: Toggle fullscreen mode
-   - **Keyboard Shortcuts**:
-     - `ESC`: Return to Select tool when Pan tool is active
+### 2. Add SVGs
 
-The guide G-code file contains rectangles marking where each paper should be placed. Print this first, place your papers, then print the color layers one by one.
+Click **"Choose SVG File"** in the SVG Library panel to upload one or more SVG files.
+
+### 3. Add Papers
+
+Click **"Add Paper"** to add a paper to the canvas. Choose from preset sizes or select **"Custom Size..."** for custom dimensions (mm or inches).
+
+### 4. Assign SVGs to Papers
+
+Select a paper on the canvas, then pick an SVG from the library in the Inspector panel to assign it.
+
+### 5. Arrange Papers
+
+**Select Tool (V)**:
+- Click to select a paper; Shift-click to add to selection (multi-select)
+- Drag to move; drag corner handles to scale; drag top handle to rotate
+- Use the Inspector panel for precise numeric control (position, scale, rotation)
+- Lock a paper to prevent accidental moves
+
+**Pan Tool (H)**: Click and drag to pan the canvas.
+
+**Alignment Tools** (sidebar): Align or distribute multiple selected papers — left, right, top, bottom, center horizontally/vertically, distribute horizontally/vertically.
+
+**Snap to Grid**: Toggle 10mm grid snapping from the toolbar.
+
+**Auto-Arrange**: Click **"Arrange"** to automatically lay out all papers in a grid.
+
+### 6. Undo / Redo
+
+- **Undo**: `Cmd+Z` (macOS) / `Ctrl+Z`
+- **Redo**: `Cmd+Shift+Z` / `Ctrl+Y`
+- Up to 50 undo steps are kept.
+
+### 7. Export
+
+Click **"Export"** to generate output files. You'll be prompted to select an output folder (or leave empty for a temp folder).
+
+If any papers are outside the canvas boundaries, you'll receive a warning before export.
+
+**Export generates:**
+- Combined SVG with all arranged elements
+- G-code files — one per color layer, named `file#RRGGBB_colorname.gcode`
+- Guide G-code with paper boundary rectangles (for paper placement)
+- `stats.txt` with detailed statistics:
+  - Operations summary (papers, SVGs, transformations)
+  - Distance statistics by color (travel, draw, total — human-readable)
+  - Pen operations (pen lifts, segments, average segment length)
+  - Estimated completion time per color and total
+
+Print the guide G-code first, place your papers, then print color layers one by one.
+
+### Keyboard Shortcuts
+
+| Key | Action |
+|-----|--------|
+| `V` | Select tool |
+| `H` | Pan tool |
+| `Space` | Toggle pan tool (hold) |
+| `Esc` | Return to Select tool |
+| `Delete` / `Backspace` | Delete selected paper(s) |
+| `Cmd+D` / `Ctrl+D` | Duplicate selected paper |
+| `Cmd+Z` / `Ctrl+Z` | Undo |
+| `Cmd+Shift+Z` / `Ctrl+Y` | Redo |
+| `Arrow keys` | Nudge selected paper (1mm; +Shift = 10mm) |
+| `?` | Show keyboard shortcut help |
 
 ## Features
 
 ### Plotter Studio GUI
 
-- **Native Desktop App**: Runs as a native window using pywebview (or in browser)
-- **Modern Dark Theme**: Midnight Precision theme with cyan accents
-- **Frameless Mode**: Clean, borderless window with macOS vibrancy effect
-- **Custom Title Bar**: macOS-style traffic lights (close, minimize, maximize)
-- **Canvas Tools**:
-  - Select tool for moving, scaling, and rotating papers
-  - Pan tool for navigating large canvases
-  - Zoom controls with reset functionality
-  - Fullscreen mode
-- **Paper Management**:
-  - Add preset or custom-sized papers
-  - Assign SVGs to papers
-  - Visual transformation with numeric controls
-  - Auto-arrange multiple papers
-- **Export Features**:
-  - Combined SVG generation
-  - Per-color G-code files
-  - Guide G-code with paper boundaries
-  - Detailed statistics (stats.txt) including:
-    - Distance traveled and drawn per color
-    - Pen lift counts
-    - Segment counts and averages
-    - Estimated completion time
-- **User Experience**:
-  - Custom modal dialogs (no browser alerts)
-  - Canvas boundary warnings
-  - Export cancellation support
-  - Clear all functionality
-  - Lucide icons throughout
+- **Native Desktop App**: Runs as a native window via pywebview (or in browser)
+- **Modern Dark Theme**: Midnight Precision — dark mode with cyan accents
+- **Frameless Mode**: Borderless window with macOS vibrancy effect and custom traffic-light controls
+- **Canvas Tools**: Select, Pan, Zoom, Fullscreen
+- **Multi-select**: Shift-click to select multiple papers; move or align them together
+- **Alignment Tools**: Align left/right/top/bottom, center H/V, distribute H/V
+- **Snap to Grid**: 10mm grid snapping with visual grid overlay
+- **Undo/Redo**: 50-step history for paper position and state changes
+- **Lock/Unlock**: Lock individual papers to prevent accidental edits
+- **Auto-arrange**: Automatic grid layout for all papers
+- **Export**: Combined SVG, per-color G-code, guide G-code, and `stats.txt`
+- **PNG Preview Caching**: SVG previews are generated once and cached for performance
+- **Toast Notifications**: Non-blocking status feedback
+- **Custom Modals**: No browser alerts — all dialogs are styled to match the theme
+- **Lucide Icons**: Consistent icon system throughout
 
-### CLI Commands
+### CLI
 
-All commands support `--help` for detailed usage information.
+- `process`: Scale, center, and optimize an SVG for plotting via vpype
+- `check`: Verify SVG fits a paper size
+- `generate-boundary`: G-code border trace for paper placement
+- `calibrate`: Spiral calibration pattern
+- `manage-papers`: Interactive paper preset editor
 
 ## Requirements
 
-- Python 3.6+
+- Python 3.8+
 - `vpype` (installed separately)
-- Dependencies listed in `pyproject.toml`:
-  - typer, questionary, rich (CLI)
-  - flask, pywebview (GUI)
-  - pyyaml (configuration)
-  - cairosvg, pillow (SVG processing)
+- Dependencies in `pyproject.toml`:
+  - `typer`, `questionary`, `rich` — CLI
+  - `flask`, `pywebview` — GUI
+  - `pyyaml` — configuration
+  - `cairosvg`, `pillow` — SVG processing
 
 ## Troubleshooting
 
 ### Native Window Not Opening
 
-If `plotter studio` fails to open a native window:
 - Ensure `pywebview` is installed: `pip install pywebview`
 - Try browser mode: `plotter studio --browser`
 - Check console output for error messages
 
-### macOS Icon Not Showing
+### macOS App Icon
 
-When running via CLI (`plotter studio`), macOS may show the Python icon instead of a custom app icon. This is a macOS limitation for CLI-launched Python scripts. To get a custom icon, you would need to build a proper `.app` bundle (not currently supported).
+When launched from the CLI, macOS shows the Python icon. This is a macOS limitation for CLI-launched scripts. Building a proper `.app` bundle is not currently supported.
 
 ### Export Issues
 
-- **Papers outside canvas**: You'll receive a warning before export. Adjust paper positions to be fully within the canvas boundaries.
-- **Export cancellation**: If you cancel during folder selection, the export process will abort and reset automatically.
-- **Missing stats.txt**: Ensure the export completed successfully. Check the output folder for all generated files.
+- **Papers outside canvas**: Adjust paper positions to be fully within the canvas before exporting.
+- **Export cancelled**: If you cancel folder selection, the export aborts and resets automatically.
+- **vpype errors**: The CLI will print vpype's stderr output to help diagnose failures.
 
 ### Canvas Navigation
 
-- **Pan tool stuck**: Press `ESC` to return to Select tool
-- **Reset view**: Click the zoom percentage (e.g., "100%") to reset zoom and position
-- **Fullscreen**: Use the fullscreen button in the header or press `F11` (browser mode)
+- **Reset view**: Click the zoom percentage (e.g., "100%") to reset zoom and pan
+- **Pan stuck**: Press `Esc` to return to Select tool
 
 ## Contributing
 
-Feel free to submit issues or pull requests to improve the project.
+Feel free to submit issues or pull requests.

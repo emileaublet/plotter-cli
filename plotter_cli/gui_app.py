@@ -1,6 +1,19 @@
 """
-Flask application for the Plotter GUI.
-Provides a web-based interface for arranging multiple SVGs on a canvas.
+Flask application for the Plotter GUI (Plotter Studio).
+
+Provides a REST API consumed by the frontend (app.js) and a single HTML page
+served to the pywebview native window (or a browser in --browser mode).
+
+Architecture notes:
+  - State is purely in-memory: svg_library (uploaded SVGs) and paper_store
+    (papers on the canvas). Both are cleared on process exit.
+  - Coordinate system: all x/y positions stored in GUI coords (top-left origin,
+    Y increases downward). Conversion to plotter coords (bottom-left origin)
+    happens in gui_utils.py at export time: y_plotter = canvas_height - y - h
+  - PNG previews are generated once on SVG upload and the path is cached in
+    svg_library[id]["preview_png_path"]. Re-generated on cache miss.
+  - The native window is managed by pywebview; Flask runs in a daemon thread.
+    WindowControlAPI is exposed to JS via js_api for minimize/maximize/close.
 """
 
 import math

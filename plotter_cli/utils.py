@@ -6,13 +6,26 @@ import re
 import os
 
 
-# Module-level settings cache
+# Module-level settings cache — avoids repeated disk reads within a session.
+# Invalidated by save_settings() so changes are picked up immediately.
 _settings_cache = None
 _settings_cache_path = None
 
 
-# Load settings from the YAML file
 def load_settings():
+    """
+    Load settings from YAML, with caching.
+
+    Search order:
+      1. ./settings.yaml (current working directory)
+      2. plotter_cli/settings.yaml (package directory)
+      3. Hardcoded defaults
+
+    Returns a deep copy so callers can mutate without affecting the cache.
+
+    Returns:
+        dict: Settings dict with 'general' and 'papers' keys.
+    """
     global _settings_cache, _settings_cache_path
 
     # Determine which settings file would be used
@@ -151,8 +164,23 @@ def parse_dimension(value):
         return number * 25.4 / 96
 
 
-# Extract width and height from an SVG file
 def get_svg_dimensions(svg_file):
+    """
+    Parse the width and height of an SVG file in millimetres.
+
+    Resolution order:
+      1. width/height attributes on the root <svg> element (with unit conversion)
+      2. viewBox attribute (width/height fields), treated as px if no unit
+
+    Args:
+        svg_file (str): Path to the SVG file.
+
+    Returns:
+        tuple[float, float]: (width_mm, height_mm)
+
+    Raises:
+        ValueError: If dimensions cannot be determined or the file is invalid XML.
+    """
     try:
         tree = ET.parse(svg_file)
         root = tree.getroot()

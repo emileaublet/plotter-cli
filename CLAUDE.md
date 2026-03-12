@@ -15,6 +15,8 @@ Verify:
 plotter --help
 ```
 
+`vpype` must be installed separately — it is not in `pyproject.toml`.
+
 ## Project Overview
 
 CLI + desktop GUI ("Plotter Studio") for processing SVG files for pen plotters. Wraps **vpype** for path optimization and G-code generation.
@@ -27,33 +29,39 @@ CLI + desktop GUI ("Plotter Studio") for processing SVG files for pen plotters. 
 | File | Purpose |
 |------|---------|
 | `plotter_cli/commands.py` | CLI commands (Typer) |
-| `plotter_cli/utils.py` | Settings, SVG parsing, G-code utils |
+| `plotter_cli/utils.py` | Settings, SVG parsing, G-code utils, stat formatting |
 | `plotter_cli/gui_app.py` | Flask routes + in-memory state |
 | `plotter_cli/gui_utils.py` | SVG combining, G-code export pipeline |
 | `plotter_cli/gcode_parser.py` | Z-height optimization for G-code |
 | `plotter_cli/settings.yaml` | Machine config + paper sizes |
 | `plotter_cli/.vpype.toml` | vpype G-code template |
-| `plotter_cli/gui/templates/index.html` | GUI HTML (2500+ lines) |
+| `plotter_cli/gui/templates/index.html` | GUI HTML |
 | `plotter_cli/gui/static/app.js` | GUI JavaScript frontend |
-| `plotter_cli/gui/static/style.css` | GUI styles |
+| `plotter_cli/gui/static/style.css` | GUI styles (Midnight Precision theme) |
 
 ## Architecture
 
 - **In-memory state**: `svg_library{}` and `paper_store{}` in `gui_app.py` — no persistence between sessions
 - **Coordinate systems**: GUI = top-left origin (Y down); Plotter = bottom-left origin (Y up). Conversion: `y_plotter = canvas_height - y_gui - height`
-- **vpype** is called via `subprocess` — must be installed separately (not in `pyproject.toml`)
+- **vpype** is called via `subprocess` — must be installed separately
 - **Settings load order**: `./settings.yaml` → `plotter_cli/settings.yaml` → hardcoded defaults
 - **Native window**: pywebview wraps Flask; Flask runs in a daemon thread
 
 ## GUI API Routes
 
 All under `/api/`:
-- `POST /api/add-svg` — upload SVG
+- `POST /api/add-svg` — upload SVG; generates and caches PNG preview
+- `GET /api/svg-preview/<id>` — serve cached PNG preview (regenerates on cache miss)
 - `POST /api/add-paper` — add paper to canvas
-- `POST /api/update-paper` — move/resize/rotate/assign SVG
+- `POST /api/update-paper` — move/resize/rotate/lock/assign SVG to paper
 - `POST /api/auto-arrange` — auto-layout papers in a grid
+- `POST /api/align-papers` — align or distribute selected papers (`action`: `align_left`, `align_right`, `align_top`, `align_bottom`, `center_h`, `center_v`, `distribute_h`, `distribute_v`)
+- `POST /api/bulk-update-papers` — update multiple paper positions at once
 - `POST /api/clone-paper/<id>` — duplicate paper
+- `DELETE /api/remove-paper/<id>` — remove a paper
+- `DELETE /api/remove-svg/<id>` — remove SVG and its associated papers
 - `POST /api/export` — generate combined SVG + G-code output
+- `POST /api/clear-all` — remove all papers and SVGs
 - `GET|PUT /api/settings` — read/write settings
 
 ## G-code Pipeline
@@ -76,6 +84,17 @@ All distances in mm:
 ## Dimension Units
 
 Parser supports: `mm`, `cm`, `in`, `pt`, `pc`, `px` (unitless → px at 96dpi).
+
+## GUI Frontend Details
+
+- **Multi-select**: Shift-click to add papers to selection (`selectedPaperIds` Set). All selected papers move together on drag.
+- **Undo/redo**: `undoStack` / `redoStack` arrays (max 50). Snapshot taken before any mutation. `Cmd+Z` / `Cmd+Shift+Z`.
+- **Snap-to-grid**: `snapToGrid` boolean toggle. Grid = 10mm. Visual grid drawn on canvas when active.
+- **Lock**: `paper.locked` — locked papers are unselectable and undeletable.
+- **PNG caching**: `svg_data["preview_png_path"]` stores the generated path; only regenerated if file is missing.
+- **Toasts**: `showToast(message, type, duration)` — non-blocking feedback. Types: `success`, `error`, `info`.
+- **Modals**: `showAlert()` / `showConfirm()` — never use browser `alert()`/`confirm()`.
+- **Icons**: After adding Lucide icons to DOM, call `lucide.createIcons({ nodes: [element] })`.
 
 ## Dependencies
 
