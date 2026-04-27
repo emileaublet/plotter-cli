@@ -31,6 +31,7 @@ from werkzeug.utils import secure_filename
 from .utils import (
     load_settings,
     save_settings,
+    get_settings_file_path,
     get_svg_dimensions,
     validate_svg_dimensions,
     calculate_gcode_stats,
@@ -43,6 +44,15 @@ from .gui_utils import (
     generate_combined_svg,
     generate_guide_gcode,
     process_svg_to_gcode,
+)
+from .surface_calibration import (
+    generate_calibration_grid_gcode,
+    apply_height_map_to_gcode_text,
+    grid_dimensions,
+    build_height_map_dict,
+    save_height_map_json,
+    load_height_map_json,
+    HeightMap,
 )
 
 app = Flask(
@@ -62,6 +72,40 @@ app.config["MAX_CONTENT_LENGTH"] = (
 # In-memory storage (in production, use a database)
 svg_library = {}  # Available SVGs that can be assigned to papers
 paper_store = {}  # Papers on the canvas
+
+
+def _default_height_map_path():
+    """Return the standard saved height map path next to the active settings file."""
+    settings_path = get_settings_file_path()
+    return os.path.join(os.path.dirname(settings_path), "height_map.json")
+
+
+def _height_map_status(settings=None):
+    """Return the calibration map status used by Studio exports."""
+    if settings is None:
+        settings = load_settings()
+
+    configured = settings["general"].get("height_map_path")
+    default_path = _default_height_map_path()
+    source = "none"
+    effective_path = None
+
+    if configured:
+        source = "configured"
+        effective_path = os.path.abspath(os.path.expanduser(str(configured).strip()))
+    elif os.path.isfile(default_path):
+        source = "default"
+        effective_path = default_path
+
+    exists = bool(effective_path and os.path.isfile(effective_path))
+    return {
+        "height_map_configured_path": configured or "",
+        "height_map_default_path": default_path,
+        "height_map_effective_path": effective_path or "",
+        "height_map_source": source,
+        "height_map_exists": exists,
+        "height_map_will_apply": exists,
+    }
 
 # Window control API for frameless windows
 class WindowControlAPI:
@@ -107,10 +151,12 @@ def index():
 def get_settings():
     """Get current plotter settings."""
     settings = load_settings()
+    height_map_status = _height_map_status(settings)
     return jsonify(
         {
             "area_width": settings["general"]["area_width"],
             "area_height": settings["general"]["area_height"],
+            "paper_gap": settings["general"].get("paper_gap", 30.0),
             "z_up_long": settings["general"]["z_up_long"],
             "z_up_short": settings["general"]["z_up_short"],
             "z_up_threshold": settings["general"]["z_up_threshold"],
@@ -119,7 +165,11 @@ def get_settings():
             "feed_rate_travel": settings["general"]["feed_rate_travel"],
             "feed_rate_z": settings["general"]["feed_rate_z"],
             "registration_marks_length": settings["general"]["registration_marks_length"],
+            "path_sorting": settings["general"].get("path_sorting", True),
+            "path_reversing": settings["general"].get("path_reversing", True),
+            "height_map_path": settings["general"].get("height_map_path") or "",
             "papers": settings["papers"],
+            **height_map_status,
         }
     )
 
@@ -138,6 +188,8 @@ def update_settings():
             settings["general"]["area_width"] = float(data["area_width"])
         if "area_height" in data:
             settings["general"]["area_height"] = float(data["area_height"])
+        if "paper_gap" in data:
+            settings["general"]["paper_gap"] = float(data["paper_gap"])
         if "z_up_long" in data:
             settings["general"]["z_up_long"] = float(data["z_up_long"])
         if "z_up_short" in data:
@@ -154,6 +206,15 @@ def update_settings():
             settings["general"]["feed_rate_z"] = int(data["feed_rate_z"])
         if "registration_marks_length" in data:
             settings["general"]["registration_marks_length"] = float(data["registration_marks_length"])
+        if "path_sorting" in data:
+            settings["general"]["path_sorting"] = bool(data["path_sorting"])
+        if "path_reversing" in data:
+            settings["general"]["path_reversing"] = bool(data["path_reversing"])
+        if "height_map_path" in data:
+            hmp = data["height_map_path"]
+            settings["general"]["height_map_path"] = (
+                None if hmp is None or str(hmp).strip() == "" else str(hmp).strip()
+            )
         
         # Save settings
         settings_path = save_settings(settings)
@@ -563,18 +624,16 @@ def remove_paper(paper_id):
 
 @app.route("/api/remove-svg/<svg_id>", methods=["DELETE"])
 def remove_svg(svg_id):
-    """Remove an SVG from the library. Also removes papers that have this SVG assigned."""
+    """Remove an SVG from the library. Unassigns papers that have this SVG instead of removing them."""
     if svg_id not in svg_library:
         return jsonify({"error": "SVG not found"}), 404
 
-    # Find papers using this SVG
-    papers_using_svg = [p for p in paper_store.values() if p.get("svg_id") == svg_id]
-    paper_ids_to_remove = [p["id"] for p in papers_using_svg]
-
-    # Remove papers that have this SVG assigned
-    for paper_id in paper_ids_to_remove:
-        if paper_id in paper_store:
-            del paper_store[paper_id]
+    # Unassign papers that use this SVG
+    unassigned_paper_ids = []
+    for paper in paper_store.values():
+        if paper.get("svg_id") == svg_id:
+            paper["svg_id"] = None
+            unassigned_paper_ids.append(paper["id"])
 
     svg_data = svg_library[svg_id]
     filepath = svg_data["filepath"]
@@ -595,8 +654,7 @@ def remove_svg(svg_id):
     del svg_library[svg_id]
     return jsonify({
         "success": True,
-        "papers_removed": len(paper_ids_to_remove),
-        "paper_ids": paper_ids_to_remove
+        "unassigned_paper_ids": unassigned_paper_ids
     })
 
 
@@ -794,14 +852,14 @@ def generate_stats_file(
         color_display = f"{stat['color_name']} (#{stat['hex_code']})"
         avg_seg_str = format_distance(stat['avg_segment_length'])
         lines.append(
-            f"{color_display:<20} {stat['pen_lifts']:>15} "
-            f"{stat['segments']:>15} {avg_seg_str:>20}"
+            f"{color_display:<20} {stat['pen_lifts']:>15,} "
+            f"{stat['segments']:>15,} {avg_seg_str:>20}"
         )
     
     lines.append("-" * 70)
     avg_segment_length_total = total_draw_mm / total_segments if total_segments > 0 else 0.0
     avg_seg_total_str = format_distance(avg_segment_length_total)
-    lines.append(f"{'TOTAL':<20} {total_pen_lifts:>15} {total_segments:>15} {avg_seg_total_str:>20}")
+    lines.append(f"{'TOTAL':<20} {total_pen_lifts:>15,} {total_segments:>15,} {avg_seg_total_str:>20}")
     lines.append("")
     
     # Print per-color stats - Time estimates
@@ -824,8 +882,8 @@ def generate_stats_file(
     lines.append("SUMMARY")
     lines.append("=" * 60)
     lines.append(f"Total Colors: {len(color_stats)}")
-    lines.append(f"Total Pen Lifts: {total_pen_lifts}")
-    lines.append(f"Total Segments: {total_segments}")
+    lines.append(f"Total Pen Lifts: {total_pen_lifts:,}")
+    lines.append(f"Total Segments: {total_segments:,}")
     lines.append(f"Total Travel Distance: {format_distance(total_travel_mm)}")
     lines.append(f"Total Draw Distance: {format_distance(total_draw_mm)}")
     lines.append(f"Total Distance: {format_distance(total_travel_mm + total_draw_mm)}")
@@ -851,7 +909,7 @@ def auto_arrange():
     if not papers:
         return jsonify({"error": "No papers to arrange"}), 400
 
-    gap = 30.0  # 30mm gap between papers
+    gap = float(settings["general"].get("paper_gap", 30.0))
 
     if len(papers) == 1:
         # Center single paper
@@ -895,6 +953,26 @@ def auto_arrange():
             row = i // cols
             paper["x"] = start_x + col * (max_paper_w + gap)
             paper["y"] = start_y + row * (max_paper_h + gap)
+
+    return jsonify({"success": True, "papers": list(paper_store.values())})
+
+
+@app.route("/api/auto-assign-svgs", methods=["POST"])
+def auto_assign_svgs():
+    """Assign one SVG per paper when counts match."""
+    papers = list(paper_store.values())
+    svgs = list(svg_library.values())
+
+    if not papers:
+        return jsonify({"error": "No papers available"}), 400
+    if not svgs:
+        return jsonify({"error": "No SVGs available"}), 400
+    if len(papers) != len(svgs):
+        return jsonify({"error": "Paper and SVG counts must match"}), 400
+
+    for paper, svg in zip(papers, svgs):
+        paper["svg_id"] = svg["id"]
+        _fit_svg_to_paper(paper, svg)
 
     return jsonify({"success": True, "papers": list(paper_store.values())})
 
@@ -1094,6 +1172,122 @@ def export():
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+# --- Surface calibration API routes ---
+
+
+def _height_map_path():
+    """Return the single height map file path (next to settings.yaml)."""
+    return _default_height_map_path()
+
+
+@app.route("/api/surface-cal/grid-info", methods=["GET"])
+def surface_cal_grid_info():
+    """Return grid dimensions for a given spacing."""
+    settings = load_settings()
+    g = settings["general"]
+    spacing = float(request.args.get("spacing", 30))
+    nx, ny, x_coords, y_coords = grid_dimensions(g["area_width"], g["area_height"], spacing)
+    return jsonify({
+        "nx": nx,
+        "ny": ny,
+        "x_coords": x_coords,
+        "y_coords": y_coords,
+        "area_width": g["area_width"],
+        "area_height": g["area_height"],
+    })
+
+
+@app.route("/api/surface-cal/grid", methods=["POST"])
+def surface_cal_grid():
+    """Generate calibration grid G-code and save to file."""
+    data = request.get_json()
+    output_folder = data.get("output_folder")
+    spacing = float(data.get("spacing", 30))
+    cross_size = float(data.get("cross_size", 4))
+    apply_map = bool(data.get("apply_map"))
+
+    if not output_folder:
+        return jsonify({"error": "No output folder specified"}), 400
+
+    settings = load_settings()
+    g = settings["general"]
+    aw, ah = g["area_width"], g["area_height"]
+
+    body = generate_calibration_grid_gcode(
+        aw, ah,
+        grid_spacing_mm=spacing,
+        cross_size_mm=cross_size,
+        z_up=float(g.get("z_up_long", 12)),
+        z_down=float(g.get("z_down", 0)),
+        feed_rate_draw=float(g.get("feed_rate_draw", 3000)),
+        feed_rate_travel=float(g.get("feed_rate_travel", 6000)),
+        feed_rate_z=float(g.get("feed_rate_z", 1500)),
+    )
+
+    if apply_map:
+        hm_path = _height_map_path()
+        if not os.path.isfile(hm_path):
+            return jsonify({"error": "No saved height map to apply"}), 400
+        hmap = HeightMap.from_json_file(hm_path)
+        body = apply_height_map_to_gcode_text(
+            body, hmap, z_down_base=float(g.get("z_down", 0))
+        )
+
+    filename = f"surface_cal_grid_{aw:.0f}x{ah:.0f}.gcode"
+    out_path = os.path.join(output_folder, filename)
+    os.makedirs(output_folder, exist_ok=True)
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write(body)
+
+    return jsonify({"success": True, "path": out_path})
+
+
+@app.route("/api/surface-cal/map", methods=["GET"])
+def surface_cal_get_map():
+    """Load the saved height map."""
+    fpath = _height_map_path()
+    if not os.path.isfile(fpath):
+        return jsonify({"exists": False})
+    try:
+        data = load_height_map_json(fpath)
+        data["exists"] = True
+        data["path"] = fpath
+        data["will_apply"] = _height_map_status()["height_map_will_apply"]
+        return jsonify(data)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@app.route("/api/surface-cal/map", methods=["PUT"])
+def surface_cal_save_map():
+    """Save the height map (overwrites the single file) and activate in settings."""
+    map_data = request.get_json()
+    if not map_data:
+        return jsonify({"error": "No map data provided"}), 400
+
+    fpath = _height_map_path()
+    try:
+        save_height_map_json(fpath, map_data)
+        settings = load_settings()
+        settings["general"]["height_map_path"] = fpath
+        save_settings(settings)
+        return jsonify({"success": True, "path": fpath})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/surface-cal/map", methods=["DELETE"])
+def surface_cal_delete_map():
+    """Delete the height map and clear from settings."""
+    fpath = _height_map_path()
+    if os.path.isfile(fpath):
+        os.remove(fpath)
+    settings = load_settings()
+    settings["general"]["height_map_path"] = None
+    save_settings(settings)
+    return jsonify({"success": True})
 
 
 def run_gui(

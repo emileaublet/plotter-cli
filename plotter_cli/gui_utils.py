@@ -6,7 +6,6 @@ Handles SVG processing, conversion, and G-code generation.
 import os
 import copy
 import subprocess
-import tempfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import List, Dict, Optional
@@ -14,10 +13,10 @@ from typing import List, Dict, Optional
 from .utils import (
     load_settings,
     update_vpype_config_with_z_settings,
-    get_svg_dimensions,
     rename_gcode_with_color_name,
 )
 from .gcode_parser import GCodeParser
+from .surface_calibration import apply_height_map_if_configured
 
 
 def svg_to_png(svg_path: str, output_path: str = None, dpi: int = 150) -> Optional[str]:
@@ -272,6 +271,12 @@ def generate_combined_svg(
                 wrapper_svg.set(
                     "viewBox", f"0 0 {original_width:.6f} {original_height:.6f}"
                 )
+            # vpype resolves nested percentage viewports against the outer canvas,
+            # unlike browser rendering. Use explicit local viewport dimensions.
+            if wrapper_svg.get("width") == "100%":
+                wrapper_svg.set("width", f"{original_width:.6f}")
+            if wrapper_svg.get("height") == "100%":
+                wrapper_svg.set("height", f"{original_height:.6f}")
 
             # Copy children from original SVG root (preserve attributes/transforms)
             for child in svg_root:
@@ -399,7 +404,11 @@ def generate_guide_gcode(svgs: List[Dict], output_path: str, settings: Dict):
 
 
 def process_svg_to_gcode(
-    svg_path: str, canvas_width: float, canvas_height: float, output_folder: str
+    svg_path: str,
+    canvas_width: float,
+    canvas_height: float,
+    output_folder: str,
+    height_map_path: Optional[str] = None,
 ) -> List[str]:
     """
     Process a combined SVG to G-code files (one per color).
@@ -409,6 +418,7 @@ def process_svg_to_gcode(
         canvas_width: Canvas width in mm
         canvas_height: Canvas height in mm
         output_folder: Folder to save G-code files
+        height_map_path: Optional JSON height map; if None, uses general.height_map_path from settings when set.
 
     Returns:
         List of generated G-code file paths
@@ -429,10 +439,8 @@ def process_svg_to_gcode(
     area_max_x = settings["general"].get("area_width", 880)
     area_max_y = settings["general"].get("area_height", 470)
     registration_marks_length = settings["general"].get("registration_marks_length", 4)
-    no_flip = False  # Could be made configurable
-
-    # Get SVG dimensions
-    svg_width, svg_height = get_svg_dimensions(svg_path)
+    path_sorting = settings["general"].get("path_sorting", True)
+    path_reversing = settings["general"].get("path_reversing", True)
 
     # Create temporary vpype config
     temp_config_path = update_vpype_config_with_z_settings(
@@ -460,14 +468,16 @@ def process_svg_to_gcode(
             "lmove",
             "all",
             "999",
-            "linemerge",
-            "linesort",
         ]
 
-        if no_flip:
-            vpype_command.append("--no-flip")
-        else:
-            vpype_command.extend(["--two-opt", "--passes", "2000"])
+        vpype_command.append("linemerge")
+
+        if path_sorting:
+            vpype_command.append("linesort")
+            if not path_reversing:
+                vpype_command.append("--no-flip")
+            else:
+                vpype_command.extend(["--two-opt", "--passes", "2000"])
 
         vpype_command.extend(
             [
@@ -547,6 +557,12 @@ def process_svg_to_gcode(
                 parser.parse_file(Path(gcode_file))
             except Exception as e:
                 print(f"Warning: Failed to optimize {gcode_file}: {e}")
+
+        apply_height_map_if_configured(
+            gcode_files,
+            settings["general"],
+            height_map_path_override=height_map_path,
+        )
 
         return gcode_files
 

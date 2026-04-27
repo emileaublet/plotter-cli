@@ -33,6 +33,7 @@ CLI + desktop GUI ("Plotter Studio") for processing SVG files for pen plotters. 
 | `plotter_cli/gui_app.py` | Flask routes + in-memory state |
 | `plotter_cli/gui_utils.py` | SVG combining, G-code export pipeline |
 | `plotter_cli/gcode_parser.py` | Z-height optimization for G-code |
+| `plotter_cli/surface_calibration.py` | Bed height map JSON, grid G-code, Z compensation pass |
 | `plotter_cli/settings.yaml` | Machine config + paper sizes |
 | `plotter_cli/.vpype.toml` | vpype G-code template |
 | `plotter_cli/gui/templates/index.html` | GUI HTML |
@@ -69,7 +70,8 @@ All under `/api/`:
 1. SVGs combined into one file with transforms (translate, scale, rotate)
 2. Passed to vpype via subprocess with dynamic `.vpype.toml`
 3. `gcode_parser.py` post-processes: Z-height optimization (short travel ≤ threshold → `z_up_short`; long travel → `z_up_long`), removes registration layer
-4. Output split per color; files named `file#RRGGBB_colorname.gcode`
+4. Optional `surface_calibration.py`: if `height_map_path` is set (Studio settings or `plotter process --height-map`), adjusts **pen-down** `Z` on draw moves using bilinear interpolation of the sampled grid (travel / pen-up Z unchanged)
+5. Output split per color; files named `file#RRGGBB_colorname.gcode`
 
 ## Settings (settings.yaml)
 
@@ -79,6 +81,7 @@ All distances in mm:
 - `z_down` — pen-down position
 - `feed_rate_draw` / `feed_rate_travel` / `feed_rate_z` — speeds (mm/min)
 - `registration_marks_length` — corner mark size
+- `height_map_path` — optional path to JSON from `plotter surface-cal sample` (bed Z map)
 - `papers[]` — list of `{name, width, height}` in mm
 
 ## Dimension Units
@@ -115,10 +118,15 @@ No test framework is configured. No `tests/` directory exists.
 ```bash
 plotter studio                  # Launch GUI
 plotter process drawing.svg     # Process single SVG (interactive)
+plotter process drawing.svg --height-map bed.json  # Same + bed height map
+plotter surface-cal grid -o .   # G-code: X grid on full bed for sampling
+plotter surface-cal grid -o . --apply-settings-map  # 2nd pass: grid uses current map from settings
+plotter surface-cal sample -o bed.json  # First pass: levels start at 0; each cell +/-1 step (delta_z mm)
+plotter surface-cal sample -o bed.json -i bed.json  # Refine: add another step on top of saved levels
 plotter check drawing.svg       # Check SVG dimensions
 plotter list                    # List paper sizes
 plotter general                 # Show machine settings
 plotter manage-papers           # Edit paper sizes interactively
 plotter generate-boundary       # Generate boundary G-code
-plotter calibrate               # Generate calibration spiral
+plotter calibrate               # Legacy test spiral (vpype); prefer surface-cal for bed maps
 ```

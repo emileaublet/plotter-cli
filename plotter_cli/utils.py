@@ -72,6 +72,7 @@ def load_settings():
             "general": {
                 "area_width": 880,
                 "area_height": 470,
+                "paper_gap": 30.0,
                 "z_up_long": 12,
                 "z_up_short": 6,
                 "z_up_threshold": 1.5,
@@ -80,6 +81,7 @@ def load_settings():
                 "feed_rate_travel": 8000,
                 "feed_rate_z": 2400,
                 "registration_marks_length": 4,
+                "height_map_path": None,
             },
             "papers": [],
         }
@@ -202,19 +204,22 @@ def get_svg_dimensions(svg_file):
             if not viewbox_str:
                 viewbox_str = root.attrib.get("{http://www.w3.org/2000/svg}viewBox")
 
+        width_is_percent = isinstance(width_str, str) and width_str.strip().endswith("%")
+        height_is_percent = isinstance(height_str, str) and height_str.strip().endswith("%")
         width = parse_dimension(width_str) if width_str else 0.0
         height = parse_dimension(height_str) if height_str else 0.0
 
-        # Fallback to viewBox if width or height are missing or zero
-        if (not width or not height) and viewbox_str:
+        # Fallback to viewBox if width or height are missing/zero OR percent-based.
+        # Percent root dimensions are viewport-relative and not absolute physical size.
+        if (not width or not height or width_is_percent or height_is_percent) and viewbox_str:
             parts = viewbox_str.split()
             if len(parts) == 4:
                 # viewBox="min-x min-y width height"
                 vb_width = parse_dimension(parts[2])
                 vb_height = parse_dimension(parts[3])
-                if not width or width == 0.0:
+                if not width or width == 0.0 or width_is_percent:
                     width = vb_width
-                if not height or height == 0.0:
+                if not height or height == 0.0 or height_is_percent:
                     height = vb_height
 
         # Final fallback - if still no dimensions, raise an error
@@ -596,12 +601,13 @@ def format_distance(mm: float) -> str:
     """
     Format distance in mm to human-readable format.
     Uses mm for values < 1km (1,000,000mm), and km for values >= 1km.
+    Numbers use thousand separators (e.g. 1,234,567.89mm).
     """
     if mm < 1_000_000:
-        return f"{mm:.2f}mm"
+        return f"{mm:,.2f}mm"
     else:
         km = mm / 1_000_000  # Convert mm to km (1 km = 1,000,000 mm)
-        return f"{km:.4f}km"
+        return f"{km:,.4f}km"
 
 
 def format_time(minutes: float) -> str:

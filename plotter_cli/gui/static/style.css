@@ -94,6 +94,32 @@ body {
   color: var(--muted-foreground);
 }
 
+.calibration-header-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.18rem 0.45rem;
+  border: 1px solid rgba(0, 229, 255, 0.45);
+  border-radius: 999px;
+  background: rgba(0, 229, 255, 0.12);
+  color: var(--primary);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.68rem;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.calibration-header-pill-muted {
+  border-color: var(--border);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--muted-foreground);
+}
+
+.calibration-header-pill-warning {
+  border-color: rgba(251, 191, 36, 0.5);
+  background: rgba(251, 191, 36, 0.12);
+  color: #fbbf24;
+}
+
 .header-actions {
   display: flex;
   gap: 0.5rem;
@@ -270,6 +296,96 @@ body:has(.custom-title-bar.frameless) .app-container {
   font-family: 'JetBrains Mono', monospace;
   font-size: 0.875rem;
   color: var(--foreground);
+}
+
+.calibration-status-card {
+  margin-top: 0.6rem;
+  padding: 0.65rem;
+  border: 1px solid rgba(0, 229, 255, 0.45);
+  border-radius: var(--radius);
+  background: linear-gradient(135deg, rgba(0, 229, 255, 0.14), rgba(0, 229, 255, 0.04));
+}
+
+.calibration-status-card-muted {
+  border-color: var(--border);
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.calibration-status-card-warning {
+  border-color: rgba(251, 191, 36, 0.5);
+  background: rgba(251, 191, 36, 0.1);
+}
+
+.calibration-status-row {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.calibration-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--primary);
+  box-shadow: 0 0 10px rgba(0, 229, 255, 0.8);
+}
+
+.calibration-status-card-muted .calibration-status-dot {
+  background: var(--muted-foreground);
+  box-shadow: none;
+}
+
+.calibration-status-card-warning .calibration-status-dot {
+  background: #fbbf24;
+  box-shadow: 0 0 10px rgba(251, 191, 36, 0.7);
+}
+
+.calibration-status-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--primary);
+}
+
+.calibration-status-card-muted .calibration-status-label {
+  color: var(--muted-foreground);
+}
+
+.calibration-status-card-warning .calibration-status-label {
+  color: #fbbf24;
+}
+
+.calibration-status-detail {
+  margin-top: 0.35rem;
+  color: var(--muted-foreground);
+  font-size: 0.72rem;
+  line-height: 1.35;
+  word-break: break-word;
+}
+
+.calibration-settings-banner {
+  margin-top: 0.75rem;
+  padding: 0.75rem;
+  border: 1px solid rgba(0, 229, 255, 0.45);
+  border-radius: var(--radius);
+  background: rgba(0, 229, 255, 0.1);
+  color: var(--foreground);
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+.calibration-settings-banner-muted {
+  border-color: var(--border);
+  background: rgba(255, 255, 255, 0.025);
+  color: var(--muted-foreground);
+}
+
+.calibration-settings-banner-warning {
+  border-color: rgba(251, 191, 36, 0.5);
+  background: rgba(251, 191, 36, 0.1);
+  color: #fef3c7;
 }
 
 /* Buttons */
@@ -807,4 +923,117 @@ body:has(.custom-title-bar.frameless) .app-container {
   border-radius: var(--radius);
   background: white;
   padding: 0.5rem;
+}
+
+/* --- Surface Calibration --- */
+
+.cal-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+  padding: 0 1.5rem;
+  gap: 0;
+}
+
+.cal-tab {
+  background: none;
+  border: none;
+  padding: 0.6rem 1rem;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.cal-tab:hover {
+  color: var(--foreground);
+}
+
+.cal-tab.active {
+  color: var(--primary);
+  border-bottom-color: var(--primary);
+}
+
+.cal-tab-content {
+  display: none;
+}
+
+.cal-tab-content.active {
+  display: block;
+}
+
+.cal-grid {
+  display: inline-grid;
+  gap: 3px;
+  user-select: none;
+}
+
+.cal-cell {
+  width: 44px;
+  height: 44px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+  font-family: 'JetBrains Mono', monospace;
+  transition: transform 0.1s, box-shadow 0.1s;
+  position: relative;
+}
+
+.cal-cell:hover {
+  transform: scale(1.08);
+  box-shadow: 0 0 0 2px var(--primary);
+  z-index: 1;
+}
+
+.cal-cell .cal-cell-level {
+  font-size: 13px;
+  line-height: 1;
+}
+
+.cal-cell .cal-cell-mm {
+  font-size: 8px;
+  opacity: 0.7;
+  line-height: 1;
+  margin-top: 2px;
+}
+
+.cal-cell.cal-zero {
+  background: hsl(220, 15%, 18%);
+  color: var(--muted-foreground);
+}
+
+.cal-cell.cal-positive {
+  background: hsl(142, 50%, 18%);
+  color: hsl(142, 70%, 65%);
+}
+
+.cal-cell.cal-negative {
+  background: hsl(0, 50%, 18%);
+  color: hsl(0, 70%, 65%);
+}
+
+/* View-mode heatmap intensity (set via inline style opacity) */
+.cal-cell.cal-view {
+  cursor: default;
+}
+
+.cal-cell.cal-view:hover {
+  transform: none;
+  box-shadow: none;
+}
+
+.cal-grid-axis-label {
+  font-size: 9px;
+  color: var(--muted-foreground);
+  font-family: 'JetBrains Mono', monospace;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }

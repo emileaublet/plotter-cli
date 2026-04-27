@@ -1,9 +1,12 @@
 import os
+import shlex
 import subprocess
 import typer
 import questionary
 import importlib.resources
 from pathlib import Path
+from typing import Optional
+
 from .utils import (
     load_settings,
     get_svg_dimensions,
@@ -17,6 +20,16 @@ from .utils import (
     hex_to_rich_color,
 )
 from .gcode_parser import GCodeParser
+from .surface_calibration import (
+    HeightMap,
+    apply_height_map_if_configured,
+    apply_height_map_to_gcode_text,
+    build_height_map_dict,
+    generate_calibration_grid_gcode,
+    grid_dimensions,
+    load_height_map_json,
+    save_height_map_json,
+)
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
@@ -199,6 +212,11 @@ def process(
         "--no-flip",
         help="Disable path flipping during line sorting (faster but may increase travel)",
     ),
+    height_map: Optional[str] = typer.Option(
+        None,
+        "--height-map",
+        help="Bed height map JSON (overrides height_map_path in settings)",
+    ),
 ):
     """Process an SVG file for plotting."""
     # Validate file extension
@@ -316,8 +334,8 @@ def process(
 
     try:
         vpype_command = (
-            f"vpype -c {temp_config_path} "
-            f"read --attr stroke {svg_file} "
+            f"vpype -c {shlex.quote(temp_config_path)} "
+            f"read --attr stroke {shlex.quote(str(svg_file))} "
             f"rect -l 998 0 0 {svg_width}mm {svg_height}mm "
             f"scaleto {custom_width}{unit} {custom_height}{unit} "
             f"layout --landscape {area_width}mmx{area_height}mm "
@@ -331,7 +349,7 @@ def process(
             f"rect {area_width - 2 * registration_marks_length}mm {area_height - 2 * registration_marks_length}mm {registration_marks_length}mm {registration_marks_length}mm "
             f"lmove 1 1 "
             f"lmove 999 2 "
-            f"gwrite -p penplotte {output_path} "
+            f"gwrite -p penplotte {shlex.quote(output_path)} "
             f"end"
         )
 
@@ -416,6 +434,15 @@ def process(
             console.print(
                 f"[green]✓[/green] Optimized G-code: "
                 f"[dim]Z={z_up_short}/{z_up_long}mm[/dim]"
+            )
+
+            full_gcode_paths = [
+                os.path.join(output_folder, f) for f in gcode_files
+            ]
+            apply_height_map_if_configured(
+                full_gcode_paths,
+                settings["general"],
+                height_map_path_override=height_map,
             )
 
         # Get feed rates for time estimation
@@ -503,7 +530,7 @@ def process(
                 format_distance(stats["travel_distance_mm"]),
                 format_distance(total_distance),
                 format_time(stats["time_minutes"]),
-                str(stats["num_segments"]),
+                f"{stats['num_segments']:,}",
                 stats["filename"],
             )
 
@@ -516,7 +543,7 @@ def process(
             format_distance(total_travel),
             f"[bold]{format_distance(total_distance_all)}[/bold]",
             f"[bold]{format_time(total_time)}[/bold]",
-            str(total_segments),
+            f"{total_segments:,}",
             "",
         )
 
@@ -686,9 +713,9 @@ def generate_boundary(
 
     try:
         vpype_command = (
-            f"vpype -c {temp_config_path} rect 0 0 {paper_width}mm {paper_height}mm "
+            f"vpype -c {shlex.quote(temp_config_path)} rect 0 0 {paper_width}mm {paper_height}mm "
             f"layout --landscape {area_width}mmx{area_height}mm linemerge linesort --two-opt --passes 2000 "
-            f"gwrite -p penplotte {gcode_path}"
+            f"gwrite -p penplotte {shlex.quote(gcode_path)}"
         )
 
         # Set a valid working directory
@@ -826,10 +853,10 @@ def calibrate(
         rect_commands = " ".join(spiral_rects)
 
         vpype_command = (
-            f"vpype -c {temp_config_path} "
+            f"vpype -c {shlex.quote(temp_config_path)} "
             f"{rect_commands} "
             f"layout --landscape {area_width}mmx{area_height}mm linemerge linesort --two-opt --passes 2000 "
-            f"gwrite -p penplotte {gcode_path}"
+            f"gwrite -p penplotte {shlex.quote(gcode_path)}"
         )
 
         # Set a valid working directory
@@ -902,6 +929,200 @@ def studio(
         vibrancy=vibrancy,
     )
 
+
+
+surface_cal_app = typer.Typer(
+    no_args_is_help=True,
+    help="Bed surface height calibration (grid G-code + JSON map).",
+)
+
+
+@surface_cal_app.command("grid")
+def surface_cal_grid(
+    output: Optional[str] = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="Output .gcode file or directory (default: cwd)",
+    ),
+    spacing: float = typer.Option(30.0, "--spacing", help="Grid spacing (mm)"),
+    cross_size: float = typer.Option(4.0, "--cross-size", help="X mark size (mm)"),
+    height_map: Optional[str] = typer.Option(
+        None,
+        "--height-map",
+        help="JSON map: bake offsets into this grid (2nd+ pass). Omit path with --apply-settings-map.",
+    ),
+    apply_settings_map: bool = typer.Option(
+        False,
+        "--apply-settings-map",
+        help="Use height_map_path from settings with generated grid (after --height-map if both set, height-map wins).",
+    ),
+):
+    """Emit G-code with an X at each grid point over the machine bed."""
+    settings = load_settings()
+    g = settings["general"]
+    aw, ah = g["area_width"], g["area_height"]
+    z_up = g.get("z_up_long", 12)
+    z_down = g.get("z_down", 0)
+    fd = float(g.get("feed_rate_draw", 3000))
+    ft = float(g.get("feed_rate_travel", 6000))
+    fz = float(g.get("feed_rate_z", 1500))
+    body = generate_calibration_grid_gcode(
+        aw,
+        ah,
+        grid_spacing_mm=spacing,
+        cross_size_mm=cross_size,
+        z_up=z_up,
+        z_down=z_down,
+        feed_rate_draw=fd,
+        feed_rate_travel=ft,
+        feed_rate_z=fz,
+    )
+    hm_path = height_map
+    if hm_path is None and apply_settings_map:
+        hm_path = g.get("height_map_path")
+    if hm_path:
+        hm_path = os.path.abspath(os.path.expanduser(str(hm_path).strip()))
+        if not os.path.isfile(hm_path):
+            console.print(
+                Panel(f"[red]Height map not found:[/red] {hm_path}", style="bold red")
+            )
+            raise typer.Exit(code=1)
+        hmap = HeightMap.from_json_file(hm_path)
+        body = apply_height_map_to_gcode_text(body, hmap, z_down_base=float(z_down))
+        console.print("[dim]Applied height map to calibration grid G-code[/dim]")
+    if output:
+        out = Path(output).expanduser()
+        out = out.resolve()
+        if out.is_dir() or str(output).endswith(os.sep):
+            out = out / f"surface_cal_grid_{aw:.0f}x{ah:.0f}.gcode"
+    else:
+        out = Path(f"surface_cal_grid_{aw:.0f}x{ah:.0f}.gcode")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(body, encoding="utf-8")
+    console.print(
+        Panel(
+            f"[green]Wrote calibration grid[/green]\n{out}",
+            style="bold green",
+        )
+    )
+
+
+@surface_cal_app.command("sample")
+def surface_cal_sample(
+    output: str = typer.Option(
+        ...,
+        "--output",
+        "-o",
+        help="Path to write height map JSON",
+    ),
+    spacing: float = typer.Option(30.0, "--spacing", help="Must match grid G-code"),
+    delta_z: float = typer.Option(
+        0.2,
+        "--delta-z",
+        help="mm per step; typical 0.1–0.25 (each -1/+1 adds one step to the cell level)",
+    ),
+    input_json: Optional[str] = typer.Option(
+        None,
+        "--input",
+        "-i",
+        help="Existing map: add another -1/0/+1 pass on top of current levels",
+    ),
+):
+    """Interactive: -1 / 0 / +1 per cell; levels accumulate (e.g. -1 twice => -2)."""
+    settings = load_settings()
+    g = settings["general"]
+    aw, ah = g["area_width"], g["area_height"]
+    nx, ny, xs, ys = grid_dimensions(aw, ah, spacing)
+    prev = None
+    if input_json:
+        prev = load_height_map_json(input_json)
+        if float(prev["grid_spacing"]) != spacing:
+            console.print(
+                Panel(
+                    "[red]--spacing must match input file grid_spacing[/red]",
+                    style="bold red",
+                )
+            )
+            raise typer.Exit(code=1)
+        if abs(float(prev["delta_z_mm"]) - delta_z) > 1e-9:
+            console.print(
+                Panel(
+                    "[red]--delta-z must match input file delta_z_mm for refinement[/red]",
+                    style="bold red",
+                )
+            )
+            raise typer.Exit(code=1)
+        if float(prev["area_width"]) != aw or float(prev["area_height"]) != ah:
+            console.print(
+                Panel(
+                    "[red]Input map bed size must match current settings[/red]",
+                    style="bold red",
+                )
+            )
+            raise typer.Exit(code=1)
+        points = [[int(v) for v in row] for row in prev["points"]]
+        if len(points) != ny or (points and len(points[0]) != nx):
+            console.print(Panel("[red]Input map grid shape mismatch[/red]", style="bold red"))
+            raise typer.Exit(code=1)
+        console.print("[cyan]Refining[/cyan] existing map (adding to each cell level)")
+    else:
+        points = [[0 for _ in range(nx)] for _ in range(ny)]
+
+    console.print(
+        f"Grid {nx}x{ny} on {aw}x{ah}mm bed, spacing {spacing}mm, delta_z={delta_z}mm/step. "
+        f"Order: row 0 Y={ys[0]:.1f} .. row {ny-1} Y={ys[-1]:.1f}"
+    )
+    for yi in range(ny):
+        for xi in range(nx):
+            cur = points[yi][xi]
+            off_mm = cur * delta_z
+            label = (
+                f"Y={ys[yi]:.0f} row {yi+1}/{ny}, X={xs[xi]:.0f} col {xi+1}/{nx} — "
+                f"level {cur} (~{off_mm:+.3f}mm)"
+            )
+            choice = questionary.select(
+                label,
+                choices=[
+                    "-1  deeper",
+                    "0  no change",
+                    "+1  higher",
+                ],
+            ).ask()
+            if choice is None:
+                raise typer.Exit(code=1)
+            points[yi][xi] = cur + int(choice.split()[0])
+
+    name_default = (prev or {}).get("name") or ""
+    paper_default = (prev or {}).get("paper") or ""
+    plotter_default = (prev or {}).get("plotter") or ""
+    pen_default = (prev or {}).get("pen") or ""
+    name = typer.prompt("Profile name (optional)", default=name_default, show_default=False)
+    paper = typer.prompt("Paper note (optional)", default=paper_default, show_default=False)
+    plotter = typer.prompt("Plotter note (optional)", default=plotter_default, show_default=False)
+    pen = typer.prompt("Pen note (optional)", default=pen_default, show_default=False)
+    data = build_height_map_dict(
+        grid_spacing=spacing,
+        delta_z_mm=delta_z,
+        area_width=aw,
+        area_height=ah,
+        points=points,
+        name=name,
+        paper=paper,
+        plotter=plotter,
+        pen=pen,
+    )
+    outp = Path(output).expanduser().resolve()
+    save_height_map_json(outp, data)
+    console.print(
+        Panel(
+            f"[green]Saved height map[/green]\n{outp}",
+            style="bold green",
+        )
+    )
+
+
+app.add_typer(surface_cal_app, name="surface-cal")
 
 if __name__ == "__main__":
     app(prog_name="plotter")

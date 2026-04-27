@@ -5,35 +5,39 @@ general:
   z_up_short: 6
   z_up_threshold: 1.5
   z_down: -0.25
-  feed_rate_draw: 8000 # Feed rate for drawing movements (mm/min)
-  feed_rate_travel: 8000 # Feed rate for travel movements (mm/min)
-  feed_rate_z: 2400 # Feed rate for Z-axis movements (mm/min)
+  feed_rate_draw: 8000
+  feed_rate_travel: 8000
+  feed_rate_z: 2400
   registration_marks_length: 4
+  height_map_path: null
 papers:
-  - height: 304.79999999999995
-    name: 9x12
-    width: 228.6
-  - height: 355.6
-    name: 11x14
-    width: 279.4
-  - height: 431.79999999999995
-    name: 11x17
-    width: 279.4
-  - height: 406.4
-    name: 12x16
-    width: 304.8
-  - height: 431.8
-    name: 14x17
-    width: 355.6
-  - height: 457.2
-    name: 12x18
-    width: 304.8
-  - name: 18x24
-    width: 457
-    height: 610
-  - name: 8.5x11
-    width: 215.9
-    height: 279.4
-  - name: A3
-    width: 294
-    height: 420
+- height: 304.79999999999995
+  name: 9x12
+  width: 228.6
+- height: 355.6
+  name: 11x14
+  width: 279.4
+- height: 431.79999999999995
+  name: 11x17
+  width: 279.4
+- height: 406.4
+  name: 12x16
+  width: 304.8
+- height: 431.8
+  name: 14x17
+  width: 355.6
+- height: 457.2
+  name: 12x18
+  width: 304.8
+- name: 18x24
+  width: 457
+  height: 610
+- name: 8.5x11
+  width: 215.9
+  height: 279.4
+- name: 16x20
+  width: 406.4
+  height: 508
+- name: A3
+  width: 294
+  height: 420

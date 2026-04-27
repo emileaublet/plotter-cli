@@ -180,6 +180,7 @@ class PlotterStudio {
 
   refresh({ paperList = true, inspector = true, render = true } = {}) {
     if (paperList) this.updatePaperList();
+    this.updateAutoAssignVisibility();
     if (inspector) this.updateInspector();
     if (render) this.render();
   }
@@ -235,6 +236,7 @@ class PlotterStudio {
     await this.loadSettings();
     this.setupCanvas();
     this.setupEventListeners();
+    this.setupCalibration();
     await Promise.all([this.loadSvgLibrary(), this.loadPapers()]);
     this.render();
     this.updateInspector();
@@ -349,6 +351,7 @@ class PlotterStudio {
       this.setupCanvas();
       this.populatePaperSelects();
       this.updateBedInfo();
+      this.updateCalibrationStatusUI(this.settings);
     } catch (error) {
       console.error('Failed to load settings:', error);
     }
@@ -362,6 +365,7 @@ class PlotterStudio {
     if (this.settings) {
       document.getElementById('settings-area-width').value = this.settings.area_width;
       document.getElementById('settings-area-height').value = this.settings.area_height;
+      document.getElementById('settings-paper-gap').value = this.settings.paper_gap ?? 30;
       document.getElementById('settings-z-up-long').value = this.settings.z_up_long;
       document.getElementById('settings-z-up-short').value = this.settings.z_up_short;
       document.getElementById('settings-z-up-threshold').value = this.settings.z_up_threshold;
@@ -370,6 +374,11 @@ class PlotterStudio {
       document.getElementById('settings-feed-rate-travel').value = this.settings.feed_rate_travel;
       document.getElementById('settings-feed-rate-z').value = this.settings.feed_rate_z;
       document.getElementById('settings-registration-marks-length').value = this.settings.registration_marks_length;
+      const hmp = document.getElementById('settings-height-map-path');
+      if (hmp) hmp.value = this.settings.height_map_path || '';
+      document.getElementById('settings-path-sorting').checked = this.settings.path_sorting !== false;
+      document.getElementById('settings-path-reversing').checked = this.settings.path_reversing !== false;
+      this.updateCalibrationStatusUI(this.settings);
     }
 
     modal.classList.add('active');
@@ -381,6 +390,7 @@ class PlotterStudio {
       const settingsData = {
         area_width: parseFloat(document.getElementById('settings-area-width').value),
         area_height: parseFloat(document.getElementById('settings-area-height').value),
+        paper_gap: parseFloat(document.getElementById('settings-paper-gap').value),
         z_up_long: parseFloat(document.getElementById('settings-z-up-long').value),
         z_up_short: parseFloat(document.getElementById('settings-z-up-short').value),
         z_up_threshold: parseFloat(document.getElementById('settings-z-up-threshold').value),
@@ -389,6 +399,9 @@ class PlotterStudio {
         feed_rate_travel: parseInt(document.getElementById('settings-feed-rate-travel').value),
         feed_rate_z: parseInt(document.getElementById('settings-feed-rate-z').value),
         registration_marks_length: parseFloat(document.getElementById('settings-registration-marks-length').value),
+        path_sorting: document.getElementById('settings-path-sorting').checked,
+        path_reversing: document.getElementById('settings-path-reversing').checked,
+        height_map_path: (document.getElementById('settings-height-map-path')?.value ?? '').trim(),
       };
 
       // Validate inputs
@@ -398,6 +411,10 @@ class PlotterStudio {
       }
       if (isNaN(settingsData.area_height) || settingsData.area_height <= 0) {
         await showAlert('Error', 'Canvas height must be a positive number', 'error');
+        return;
+      }
+      if (isNaN(settingsData.paper_gap) || settingsData.paper_gap < 0) {
+        await showAlert('Error', 'Paper gap must be zero or a positive number', 'error');
         return;
       }
 
@@ -434,6 +451,7 @@ class PlotterStudio {
 
       // Close modal
       document.getElementById('settings-modal').classList.remove('active');
+      await this.updateHeightMapIndicator();
 
       await showAlert('Settings Saved', 'Settings have been saved successfully.', 'success');
     } catch (error) {
@@ -449,6 +467,90 @@ class PlotterStudio {
     if (widthEl) widthEl.textContent = `${this.canvasWidth}mm`;
     if (heightEl) heightEl.textContent = `${this.canvasHeight}mm`;
     if (sizeEl) sizeEl.textContent = `${this.canvasWidth} × ${this.canvasHeight}mm`;
+  }
+
+  formatShortPath(path) {
+    if (!path) return '';
+    const parts = path.split('/');
+    if (parts.length <= 3) return path;
+    return `.../${parts.slice(-2).join('/')}`;
+  }
+
+  updateCalibrationStatusUI(status = this.settings) {
+    const headerPill = document.getElementById('calibration-header-pill');
+    const card = document.getElementById('height-map-status');
+    const label = document.getElementById('height-map-indicator');
+    const detail = document.getElementById('height-map-status-detail');
+    const settingsBanner = document.getElementById('settings-height-map-status');
+
+    const willApply = Boolean(status?.height_map_will_apply);
+    const effectivePath = status?.height_map_effective_path || '';
+    const configuredPath = status?.height_map_configured_path || status?.height_map_path || '';
+    const hasConfiguredPath = configuredPath.trim() !== '';
+    const missingConfiguredMap = hasConfiguredPath && !willApply;
+    const source = status?.height_map_source === 'default' ? 'saved calibration map' : 'configured map';
+
+    const setClass = (el, base, stateClass) => {
+      if (!el) return;
+      el.className = stateClass ? `${base} ${stateClass}` : base;
+    };
+
+    if (willApply) {
+      setClass(headerPill, 'calibration-header-pill', '');
+      setClass(card, 'calibration-status-card', '');
+      setClass(settingsBanner, 'calibration-settings-banner', '');
+      if (headerPill) {
+        headerPill.textContent = 'Calibration: SET - WILL BE USED';
+        headerPill.title = effectivePath;
+      }
+      if (label) label.textContent = 'SET - WILL BE USED';
+      if (detail) {
+        detail.textContent = `Exports will apply the ${source}: ${this.formatShortPath(effectivePath)}`;
+        detail.title = effectivePath;
+      }
+      if (settingsBanner) {
+        settingsBanner.textContent = `Calibration map is set and WILL BE USED on export. Path: ${effectivePath}`;
+        settingsBanner.title = effectivePath;
+      }
+      return;
+    }
+
+    if (missingConfiguredMap) {
+      setClass(headerPill, 'calibration-header-pill', 'calibration-header-pill-warning');
+      setClass(card, 'calibration-status-card', 'calibration-status-card-warning');
+      setClass(settingsBanner, 'calibration-settings-banner', 'calibration-settings-banner-warning');
+      if (headerPill) {
+        headerPill.textContent = 'Calibration: path missing';
+        headerPill.title = configuredPath;
+      }
+      if (label) label.textContent = 'PATH MISSING';
+      if (detail) {
+        detail.textContent = `Configured map was not found: ${this.formatShortPath(configuredPath)}`;
+        detail.title = configuredPath;
+      }
+      if (settingsBanner) {
+        settingsBanner.textContent = `Calibration path is set, but the file was not found. Exports will fail until this is fixed: ${configuredPath}`;
+        settingsBanner.title = configuredPath;
+      }
+      return;
+    }
+
+    setClass(headerPill, 'calibration-header-pill', 'calibration-header-pill-muted');
+    setClass(card, 'calibration-status-card', 'calibration-status-card-muted');
+    setClass(settingsBanner, 'calibration-settings-banner', 'calibration-settings-banner-muted');
+    if (headerPill) {
+      headerPill.textContent = 'Calibration: not set';
+      headerPill.title = '';
+    }
+    if (label) label.textContent = 'Not set';
+    if (detail) {
+      detail.textContent = 'Exports will not use surface correction.';
+      detail.title = '';
+    }
+    if (settingsBanner) {
+      settingsBanner.textContent = 'Calibration map not set. Exports will use uncorrected Z.';
+      settingsBanner.title = '';
+    }
   }
 
   setupCanvas() {
@@ -475,6 +577,21 @@ class PlotterStudio {
     fileInput?.addEventListener('change', (e) => {
       if (e.target.files.length > 0) {
         this.addSvg(e.target.files[0]);
+      }
+    });
+
+    // Drag and drop SVG files onto the window
+    document.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+    });
+    document.addEventListener('drop', (e) => {
+      e.preventDefault();
+      const files = Array.from(e.dataTransfer.files).filter(
+        (f) => f.name.toLowerCase().endsWith('.svg')
+      );
+      for (const file of files) {
+        this.addSvg(file);
       }
     });
 
@@ -546,6 +663,7 @@ class PlotterStudio {
 
     // Auto-arrange
     document.getElementById('auto-arrange-btn')?.addEventListener('click', () => this.autoArrange());
+    document.getElementById('auto-assign-btn')?.addEventListener('click', () => this.autoAssignSvgs());
 
     // Alignment buttons (Item 20)
     document.querySelectorAll('[data-align]').forEach(btn => {
@@ -1123,7 +1241,7 @@ class PlotterStudio {
     // Build confirmation message
     let confirmMessage = `Are you sure you want to delete "${svg.filename}"?`;
     if (assignedCount > 0) {
-      confirmMessage += `\n\nThis SVG is assigned to ${assignedCount} paper${assignedCount > 1 ? 's' : ''}. Deleting it will also remove ${assignedCount > 1 ? 'those papers' : 'that paper'} from the canvas.`;
+      confirmMessage += `\n\nThis SVG is assigned to ${assignedCount} paper${assignedCount > 1 ? 's' : ''}. ${assignedCount > 1 ? 'Those papers' : 'That paper'} will be unassigned but kept on the canvas.`;
     }
 
     const confirmed = await showConfirm('Delete SVG', confirmMessage);
@@ -1137,17 +1255,15 @@ class PlotterStudio {
       }
 
       const result = await response.json();
-      const removedPaperIds = result.paper_ids || [];
+      const unassignedPaperIds = result.unassigned_paper_ids || [];
 
       // Remove SVG from library
       this.svgLibrary = this.svgLibrary.filter((s) => s.id !== svgId);
 
-      // Remove papers that were deleted
-      if (removedPaperIds.length > 0) {
-        this.papers = this.papers.filter((p) => !removedPaperIds.includes(p.id));
-        // Clear selection if selected paper was removed
-        if (removedPaperIds.includes(this.selectedPaperId)) {
-          this.selectedPaperId = null;
+      // Unassign papers that used this SVG
+      for (const paper of this.papers) {
+        if (unassignedPaperIds.includes(paper.id)) {
+          paper.svg_id = null;
         }
       }
 
@@ -1591,6 +1707,41 @@ class PlotterStudio {
     }
   }
 
+  updateAutoAssignVisibility() {
+    const autoAssignBtn = document.getElementById('auto-assign-btn');
+    if (!autoAssignBtn) return;
+    const paperCount = this.papers.length;
+    const svgCount = this.svgLibrary.length;
+    const shouldShow = paperCount > 0 && svgCount > 0 && paperCount === svgCount;
+    autoAssignBtn.style.display = shouldShow ? 'flex' : 'none';
+  }
+
+  async autoAssignSvgs() {
+    try {
+      const response = await fetch('/api/auto-assign-svgs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Auto assign failed');
+      }
+
+      const result = await response.json();
+      const updated = result.papers || [];
+      for (const updatedPaper of updated) {
+        const local = this.papers.find((p) => p.id === updatedPaper.id);
+        if (local) Object.assign(local, updatedPaper);
+      }
+      this.refresh();
+      showToast('SVGs auto-assigned to papers');
+    } catch (error) {
+      console.error('Auto-assign error:', error);
+      await showAlert('Error', 'Auto assign failed: ' + error.message, 'error');
+    }
+  }
+
   getCanvasPoint(event) {
     // getBoundingClientRect() already accounts for CSS transforms
     const canvasRect = this.canvas.getBoundingClientRect();
@@ -1867,7 +2018,6 @@ class PlotterStudio {
         const scaledHeight = svg.height * scale * this.scale;
         const svgX = -scaledWidth / 2;
         const svgY = -scaledHeight / 2;
-
         this.ctx.drawImage(svg.previewImage, svgX, svgY, scaledWidth, scaledHeight);
       }
     }
@@ -2095,6 +2245,456 @@ class PlotterStudio {
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
+  }
+
+  // --- Surface Calibration ---
+
+  setupCalibration() {
+    this.calSamplePoints = null;
+    this.calSampleNx = 0;
+    this.calSampleNy = 0;
+    this.cal3dRotX = -0.6;
+    this.cal3dRotZ = 0.5;
+
+    document.getElementById('open-calibration-btn')?.addEventListener('click', () => this.openCalibrationModal());
+    const calModal = document.getElementById('calibration-modal');
+    document.getElementById('close-calibration-btn')?.addEventListener('click', () => calModal?.classList.remove('active'));
+    calModal?.addEventListener('click', (e) => { if (e.target === calModal) calModal.classList.remove('active'); });
+
+    // Tabs
+    document.querySelectorAll('.cal-tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        document.querySelectorAll('.cal-tab').forEach(t => t.classList.remove('active'));
+        document.querySelectorAll('.cal-tab-content').forEach(c => c.classList.remove('active'));
+        tab.classList.add('active');
+        document.getElementById(`cal-tab-${tab.getAttribute('data-cal-tab')}`)?.classList.add('active');
+        if (tab.getAttribute('data-cal-tab') === 'view') this.calViewLoad();
+      });
+    });
+
+    // Grid tab
+    const gridSpacing = document.getElementById('cal-grid-spacing');
+    gridSpacing?.addEventListener('change', () => this.updateCalGridInfo());
+    gridSpacing?.addEventListener('input', () => this.updateCalGridInfo());
+    document.getElementById('cal-grid-apply-map')?.addEventListener('change', (e) => {
+      document.getElementById('cal-grid-map-path-group').style.display = e.target.checked ? 'block' : 'none';
+    });
+    document.getElementById('cal-grid-generate-btn')?.addEventListener('click', () => this.calGenerateGrid());
+
+    // Sample tab
+    document.getElementById('cal-sample-spacing')?.addEventListener('change', () => this.calBuildSampleGrid());
+    document.getElementById('cal-sample-load-btn')?.addEventListener('click', () => this.calLoadSavedMap());
+    document.getElementById('cal-sample-reset-btn')?.addEventListener('click', () => {
+      if (this.calSamplePoints) {
+        for (let i = 0; i < this.calSampleNy; i++)
+          for (let j = 0; j < this.calSampleNx; j++)
+            this.calSamplePoints[i][j] = 0;
+        this.calRenderSampleGrid();
+      }
+    });
+    document.getElementById('cal-sample-save-btn')?.addEventListener('click', () => this.calSaveMap());
+
+    // View tab
+    document.getElementById('cal-view-delete-btn')?.addEventListener('click', () => this.calDeleteMap());
+    this.setup3dCanvasDrag();
+    this.updateHeightMapIndicator();
+  }
+
+  openCalibrationModal() {
+    const modal = document.getElementById('calibration-modal');
+    if (!modal) return;
+    modal.classList.add('active');
+    if (window.lucide) lucide.createIcons({ nodes: [modal] });
+    this.updateCalGridInfo();
+    if (!this.calSamplePoints) this.calBuildSampleGrid();
+  }
+
+  async updateHeightMapIndicator() {
+    try {
+      const response = await fetch('/api/settings');
+      if (!response.ok) throw new Error('Failed to load calibration status');
+      const settings = await response.json();
+      this.settings = { ...this.settings, ...settings };
+      this.updateCalibrationStatusUI(this.settings);
+    } catch (error) {
+      console.error('Failed to update calibration status:', error);
+      this.updateCalibrationStatusUI({ height_map_will_apply: false });
+    }
+  }
+
+  async updateCalGridInfo() {
+    const spacing = parseFloat(document.getElementById('cal-grid-spacing')?.value) || 30;
+    try {
+      const resp = await fetch(`/api/surface-cal/grid-info?spacing=${spacing}`);
+      const data = await resp.json();
+      const el = document.getElementById('cal-grid-info');
+      if (el) el.textContent = `${data.nx} × ${data.ny} = ${data.nx * data.ny} sample points on ${data.area_width}×${data.area_height}mm bed`;
+    } catch (e) { /* ignore */ }
+  }
+
+  async calGenerateGrid() {
+    const spacing = parseFloat(document.getElementById('cal-grid-spacing')?.value) || 30;
+    const crossSize = parseFloat(document.getElementById('cal-grid-cross-size')?.value) || 4;
+    const applyMap = document.getElementById('cal-grid-apply-map')?.checked;
+    const folder = await this.pickFolder();
+    if (!folder) return;
+    try {
+      const resp = await fetch('/api/surface-cal/grid', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ output_folder: folder, spacing, cross_size: crossSize, apply_map: applyMap }),
+      });
+      const result = await resp.json();
+      if (!resp.ok) throw new Error(result.error);
+      showToast(`Grid G-code saved: ${result.path.split('/').pop()}`, 'success', 4000);
+    } catch (e) {
+      await showAlert('Error', 'Failed to generate grid: ' + e.message, 'error');
+    }
+  }
+
+  async calBuildSampleGrid() {
+    const spacing = parseFloat(document.getElementById('cal-sample-spacing')?.value) || 30;
+    try {
+      const resp = await fetch(`/api/surface-cal/grid-info?spacing=${spacing}`);
+      const data = await resp.json();
+      this.calSampleNx = data.nx;
+      this.calSampleNy = data.ny;
+      this.calSampleXCoords = data.x_coords;
+      this.calSampleYCoords = data.y_coords;
+      this.calSampleAreaW = data.area_width;
+      this.calSampleAreaH = data.area_height;
+      if (!this.calSamplePoints || this.calSamplePoints.length !== data.ny ||
+          (this.calSamplePoints[0] && this.calSamplePoints[0].length !== data.nx)) {
+        this.calSamplePoints = Array.from({ length: data.ny }, () => Array(data.nx).fill(0));
+      }
+      this.calRenderSampleGrid();
+    } catch (e) { /* ignore */ }
+  }
+
+  calRenderSampleGrid() {
+    const container = document.getElementById('cal-sample-grid');
+    if (!container) return;
+    const deltaZ = parseFloat(document.getElementById('cal-sample-delta-z')?.value) || 0.2;
+    container.style.gridTemplateColumns = `32px repeat(${this.calSampleNx}, 44px)`;
+    container.innerHTML = '';
+    const corner = document.createElement('div');
+    corner.style.cssText = 'width:32px;height:44px;';
+    container.appendChild(corner);
+    for (let j = 0; j < this.calSampleNx; j++) {
+      const l = document.createElement('div');
+      l.className = 'cal-grid-axis-label';
+      l.textContent = this.calSampleXCoords[j].toFixed(0);
+      container.appendChild(l);
+    }
+    for (let i = 0; i < this.calSampleNy; i++) {
+      const yl = document.createElement('div');
+      yl.className = 'cal-grid-axis-label';
+      yl.textContent = this.calSampleYCoords[i].toFixed(0);
+      container.appendChild(yl);
+      for (let j = 0; j < this.calSampleNx; j++) {
+        const level = this.calSamplePoints[i][j];
+        const mm = level * deltaZ;
+        const cell = document.createElement('div');
+        cell.className = `cal-cell ${level > 0 ? 'cal-positive' : level < 0 ? 'cal-negative' : 'cal-zero'}`;
+        cell.innerHTML = `<span class="cal-cell-level">${level > 0 ? '+' : ''}${level}</span><span class="cal-cell-mm">${mm >= 0 ? '+' : ''}${mm.toFixed(2)}</span>`;
+        cell.title = `Row ${i} Col ${j} — Click: +1, Shift+Click: -1`;
+        cell.addEventListener('click', (e) => {
+          this.calSamplePoints[i][j] += e.shiftKey ? -1 : 1;
+          this.calRenderSampleGrid();
+        });
+        container.appendChild(cell);
+      }
+    }
+  }
+
+  async calLoadSavedMap() {
+    try {
+      const resp = await fetch('/api/surface-cal/map');
+      const data = await resp.json();
+      if (!data.exists) { await showAlert('No Map', 'No saved height map yet.', 'info'); return; }
+      document.getElementById('cal-sample-spacing').value = data.grid_spacing;
+      document.getElementById('cal-sample-delta-z').value = data.delta_z_mm;
+      document.getElementById('cal-sample-name').value = data.name || '';
+      document.getElementById('cal-sample-paper').value = data.paper || '';
+      document.getElementById('cal-sample-plotter').value = data.plotter || '';
+      document.getElementById('cal-sample-pen').value = data.pen || '';
+      this.calSampleNx = data.nx;
+      this.calSampleNy = data.ny;
+      const infoResp = await fetch(`/api/surface-cal/grid-info?spacing=${data.grid_spacing}`);
+      const infoData = await infoResp.json();
+      this.calSampleXCoords = infoData.x_coords;
+      this.calSampleYCoords = infoData.y_coords;
+      this.calSampleAreaW = infoData.area_width;
+      this.calSampleAreaH = infoData.area_height;
+      this.calSamplePoints = data.points.map(row => row.map(v => parseInt(v)));
+      this.calRenderSampleGrid();
+      showToast('Map loaded for refinement', 'success');
+    } catch (e) {
+      await showAlert('Error', 'Failed to load map: ' + e.message, 'error');
+    }
+  }
+
+  async calSaveMap() {
+    if (!this.calSamplePoints) { await showAlert('Error', 'No sample data', 'error'); return; }
+    const spacing = parseFloat(document.getElementById('cal-sample-spacing')?.value) || 30;
+    const deltaZ = parseFloat(document.getElementById('cal-sample-delta-z')?.value) || 0.2;
+    const mapData = {
+      version: 1, grid_spacing: spacing, delta_z_mm: deltaZ,
+      area_width: this.calSampleAreaW, area_height: this.calSampleAreaH,
+      nx: this.calSampleNx, ny: this.calSampleNy, points: this.calSamplePoints,
+      name: document.getElementById('cal-sample-name')?.value || '',
+      paper: document.getElementById('cal-sample-paper')?.value || '',
+      plotter: document.getElementById('cal-sample-plotter')?.value || '',
+      pen: document.getElementById('cal-sample-pen')?.value || '',
+    };
+    try {
+      const resp = await fetch('/api/surface-cal/map', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(mapData),
+      });
+      const result = await resp.json();
+      if (!resp.ok) throw new Error(result.error);
+      await this.updateHeightMapIndicator();
+      showToast('Height map saved', 'success');
+    } catch (e) {
+      await showAlert('Error', 'Failed to save map: ' + e.message, 'error');
+    }
+  }
+
+  // --- View tab: 3D surface ---
+
+  async calViewLoad() {
+    try {
+      const resp = await fetch('/api/surface-cal/map');
+      const data = await resp.json();
+      const emptyEl = document.getElementById('cal-view-empty');
+      const contentEl = document.getElementById('cal-view-content');
+      if (!data.exists) {
+        if (emptyEl) emptyEl.style.display = 'block';
+        if (contentEl) contentEl.style.display = 'none';
+        return;
+      }
+      if (emptyEl) emptyEl.style.display = 'none';
+      if (contentEl) contentEl.style.display = 'block';
+
+      const infoEl = document.getElementById('cal-view-info');
+      if (infoEl) {
+        const dz = data.delta_z_mm;
+        let minL = Infinity, maxL = -Infinity;
+        for (const row of data.points) for (const v of row) { if (v < minL) minL = v; if (v > maxL) maxL = v; }
+        let html = `<div style="display:grid;grid-template-columns:1fr 1fr;gap:0.25rem 1rem;">`;
+        html += `<div><span style="color:var(--muted-foreground)">Grid:</span> ${data.nx}x${data.ny}</div>`;
+        html += `<div><span style="color:var(--muted-foreground)">Spacing:</span> ${data.grid_spacing}mm</div>`;
+        html += `<div><span style="color:var(--muted-foreground)">Delta Z:</span> ${dz}mm/step</div>`;
+        html += `<div><span style="color:var(--muted-foreground)">Range:</span> ${(minL*dz).toFixed(2)} to ${maxL*dz >= 0 ? '+' : ''}${(maxL*dz).toFixed(2)}mm</div>`;
+        html += `</div>`;
+        infoEl.innerHTML = html;
+      }
+      this.cal3dData = data;
+      this.calRender3d();
+    } catch (e) { console.error('Failed to load map for 3D view:', e); }
+  }
+
+  setup3dCanvasDrag() {
+    const canvas = document.getElementById('cal-3d-canvas');
+    if (!canvas) return;
+    let dragging = false, lastX = 0, lastY = 0;
+    canvas.addEventListener('mousedown', (e) => { dragging = true; lastX = e.clientX; lastY = e.clientY; canvas.style.cursor = 'grabbing'; });
+    window.addEventListener('mousemove', (e) => {
+      if (!dragging) return;
+      this.cal3dRotZ += (e.clientX - lastX) * 0.008;
+      this.cal3dRotX = Math.max(-Math.PI / 2, Math.min(-0.1, this.cal3dRotX + (e.clientY - lastY) * 0.008));
+      lastX = e.clientX; lastY = e.clientY;
+      this.calRender3d();
+    });
+    window.addEventListener('mouseup', () => { if (dragging) { dragging = false; canvas.style.cursor = 'grab'; } });
+  }
+
+  calRender3d() {
+    const canvas = document.getElementById('cal-3d-canvas');
+    if (!canvas || !this.cal3dData) return;
+    const ctx = canvas.getContext('2d');
+    const W = canvas.width, H = canvas.height;
+    ctx.clearRect(0, 0, W, H);
+
+    const data = this.cal3dData;
+    const nx = data.nx, ny = data.ny, dz = data.delta_z_mm, srcPts = data.points;
+
+    // Upsample grid then apply Gaussian blur for smooth "blanket" effect
+    const subdiv = 5;
+    const snx = (nx - 1) * subdiv + 1;
+    const sny = (ny - 1) * subdiv + 1;
+
+    // Step 1: Place source values on upsampled grid, rest = 0
+    const raw = Array.from({ length: sny }, () => new Float64Array(snx));
+    const weight = Array.from({ length: sny }, () => new Float64Array(snx));
+    for (let iy = 0; iy < ny; iy++) {
+      for (let ix = 0; ix < nx; ix++) {
+        raw[iy * subdiv][ix * subdiv] = srcPts[iy][ix] * dz;
+        weight[iy * subdiv][ix * subdiv] = 1;
+      }
+    }
+
+    // Step 2: Gaussian spread — each source point influences neighbors like a blanket
+    const sigma = subdiv * 1.2; // spread radius in subdivided cells
+    const radius = Math.ceil(sigma * 2.5);
+    const grid = Array.from({ length: sny }, () => new Float64Array(snx));
+    const wGrid = Array.from({ length: sny }, () => new Float64Array(snx));
+    for (let iy = 0; iy < ny; iy++) {
+      for (let ix = 0; ix < nx; ix++) {
+        const cy = iy * subdiv, cx = ix * subdiv;
+        const val = srcPts[iy][ix] * dz;
+        for (let dy = -radius; dy <= radius; dy++) {
+          const sy = cy + dy;
+          if (sy < 0 || sy >= sny) continue;
+          for (let dx = -radius; dx <= radius; dx++) {
+            const sx = cx + dx;
+            if (sx < 0 || sx >= snx) continue;
+            const w = Math.exp(-(dx * dx + dy * dy) / (2 * sigma * sigma));
+            grid[sy][sx] += val * w;
+            wGrid[sy][sx] += w;
+          }
+        }
+      }
+    }
+    // Normalize
+    for (let i = 0; i < sny; i++) {
+      for (let j = 0; j < snx; j++) {
+        grid[i][j] = wGrid[i][j] > 0 ? grid[i][j] / wGrid[i][j] : 0;
+      }
+    }
+
+    // Find Z range from interpolated grid
+    let minZ = Infinity, maxZ = -Infinity;
+    for (const row of grid) for (const z of row) { if (z < minZ) minZ = z; if (z > maxZ) maxZ = z; }
+    const zRange = maxZ - minZ || 0.01;
+
+    const cosX = Math.cos(this.cal3dRotX), sinX = Math.sin(this.cal3dRotX);
+    const cosZ = Math.cos(this.cal3dRotZ), sinZ = Math.sin(this.cal3dRotZ);
+    const scaleXY = 0.9;
+    // Proportional Z scale: map the actual mm range to a sensible visual height
+    // The bed is ~800mm wide, Z variations are ~1mm, so we need amplification but not crazy
+    const bedSize = Math.max(data.area_width || 800, data.area_height || 400);
+    const zScale = Math.min(0.25, Math.max(0.05, (zRange / bedSize) * 80));
+    const aspect = ny > 1 ? (ny - 1) / (nx - 1) : 1;
+
+    const project = (gx, gy, gz) => {
+      const x = ((gx / (snx - 1)) - 0.5) * 2 * scaleXY;
+      const y = ((gy / (sny - 1)) - 0.5) * 2 * scaleXY * aspect;
+      const z = ((gz - minZ) / zRange - 0.5) * 2 * zScale;
+      const rx = x * cosZ - y * sinZ;
+      const ry = x * sinZ + y * cosZ;
+      const ry2 = ry * cosX - z * sinX;
+      const rz2 = ry * sinX + z * cosX;
+      const scale = Math.min(W, H) * 0.42;
+      return [W / 2 + rx * scale, H / 2 - rz2 * scale + ry2 * scale * 0.15, ry * sinX + z * cosX];
+    };
+
+    // Warm color scheme: blue/white (low) → yellow → orange → red (high)
+    const zColor = (z, light) => {
+      const t = (z - minZ) / zRange; // 0..1
+      let r, g, b;
+      if (t < 0.25) {
+        const s = t / 0.25;
+        r = 200 + 55 * s; g = 220 + 35 * s; b = 255 - 50 * s; // cool white-blue → warm white
+      } else if (t < 0.5) {
+        const s = (t - 0.25) / 0.25;
+        r = 255; g = 255 - 60 * s; b = 205 - 155 * s; // warm white → light orange
+      } else if (t < 0.75) {
+        const s = (t - 0.5) / 0.25;
+        r = 255; g = 195 - 80 * s; b = 50 - 30 * s; // light orange → deep orange
+      } else {
+        const s = (t - 0.75) / 0.25;
+        r = 255 - 40 * s; g = 115 - 75 * s; b = 20 - 10 * s; // deep orange → red
+      }
+      // Apply simple lighting
+      const l = 0.7 + 0.3 * light;
+      return `rgb(${Math.round(r * l)}, ${Math.round(g * l)}, ${Math.round(b * l)})`;
+    };
+
+    // Build quads from subdivided grid with depth sorting
+    const quads = [];
+    for (let i = 0; i < sny - 1; i++) {
+      for (let j = 0; j < snx - 1; j++) {
+        const z00 = grid[i][j], z10 = grid[i][j+1];
+        const z01 = grid[i+1][j], z11 = grid[i+1][j+1];
+        const avgZ = (z00 + z10 + z01 + z11) / 4;
+        // Simple normal for lighting (cross product of diagonals)
+        const dx = (z10 - z01), dy = (z11 - z00);
+        const light = 1.0 / Math.sqrt(1 + dx * dx * 400 + dy * dy * 400);
+        const cx = (j + 0.5) / (snx - 1) - 0.5, cy = (i + 0.5) / (sny - 1) - 0.5;
+        const p00 = project(j, i, z00), p10 = project(j+1, i, z10);
+        const p11 = project(j+1, i+1, z11), p01 = project(j, i+1, z01);
+        quads.push({
+          p: [p00, p10, p11, p01],
+          depth: cx * sinZ + cy * cosZ,
+          color: zColor(avgZ, light),
+          isOrigEdge: (j % subdiv === 0 || i % subdiv === 0),
+        });
+      }
+    }
+    quads.sort((a, b) => a.depth - b.depth);
+
+    for (const q of quads) {
+      ctx.beginPath();
+      ctx.moveTo(q.p[0][0], q.p[0][1]);
+      for (let k = 1; k < 4; k++) ctx.lineTo(q.p[k][0], q.p[k][1]);
+      ctx.closePath();
+      ctx.fillStyle = q.color;
+      ctx.fill();
+      // Only draw wireframe on original grid lines for cleaner look
+      if (q.isOrigEdge) {
+        ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+        ctx.lineWidth = 0.5;
+        ctx.stroke();
+      }
+    }
+
+    // Axis labels
+    ctx.font = '11px JetBrains Mono, monospace';
+    ctx.fillStyle = 'rgba(255,255,255,0.5)';
+    ctx.textAlign = 'left';
+    const xEnd = project(snx - 1, 0, minZ);
+    const yEnd = project(0, sny - 1, minZ);
+    ctx.fillText(`X ${data.area_width}mm`, xEnd[0], xEnd[1] + 16);
+    ctx.fillText(`Y ${data.area_height}mm`, yEnd[0] - 40, yEnd[1] + 16);
+
+    // Color legend
+    const lx = W - 25, ly = H - 120, lw = 12, lh = 100;
+    for (let i = 0; i < lh; i++) {
+      const z = minZ + (1 - i / lh) * zRange;
+      ctx.fillStyle = zColor(z, 1.0);
+      ctx.fillRect(lx, ly + i, lw, 1);
+    }
+    ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+    ctx.strokeRect(lx, ly, lw, lh);
+    ctx.fillStyle = 'rgba(255,255,255,0.5)';
+    ctx.font = '9px JetBrains Mono, monospace';
+    ctx.textAlign = 'right';
+    ctx.fillText(`${maxZ >= 0 ? '+' : ''}${maxZ.toFixed(2)}`, lx - 3, ly + 4);
+    ctx.fillText(`${minZ >= 0 ? '+' : ''}${minZ.toFixed(2)}`, lx - 3, ly + lh + 1);
+    ctx.textAlign = 'left';
+    ctx.fillText('Drag to rotate', 10, H - 8);
+  }
+
+  async calDeleteMap() {
+    const ok = await showConfirm('Delete Height Map', 'Delete the saved height map? This cannot be undone.');
+    if (!ok) return;
+    try {
+      await fetch('/api/surface-cal/map', { method: 'DELETE' });
+      await this.updateHeightMapIndicator();
+      this.calViewLoad();
+      showToast('Height map deleted', 'success');
+    } catch (e) { await showAlert('Error', e.message, 'error'); }
+  }
+
+  async pickFolder() {
+    try {
+      const resp = await fetch('/api/select-output-folder', { method: 'POST' });
+      const data = await resp.json();
+      if (!resp.ok) return null;
+      return data.output_folder;
+    } catch (e) { return null; }
   }
 }
 
