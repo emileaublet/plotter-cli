@@ -390,7 +390,8 @@ def process(
             feed_rate_draw = settings["general"].get("feed_rate_draw", 4000)
             feed_rate_z = settings["general"].get("feed_rate_z", 1500)
 
-            # Initialize the G-code parser with settings values
+            arc_fitting = settings["general"].get("arc_fitting", False)
+            arc_tolerance = settings["general"].get("arc_tolerance", 0.05)
             parser = GCodeParser(
                 long_distance_z=z_up_long,
                 short_distance_z=z_up_short,
@@ -398,6 +399,8 @@ def process(
                 z_down=z_down,
                 feed_rate_draw=feed_rate_draw,
                 feed_rate_z=feed_rate_z,
+                arc_fitting=arc_fitting,
+                arc_tolerance=arc_tolerance,
             )
 
             # Process each G-code file with progress bar

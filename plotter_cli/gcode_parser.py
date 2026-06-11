@@ -10,6 +10,31 @@ from pathlib import Path
 from typing import Optional, Tuple
 
 
+def _circumcircle(
+    p1: Tuple[float, float],
+    p2: Tuple[float, float],
+    p3: Tuple[float, float],
+) -> Tuple[Optional[Tuple[float, float]], Optional[float]]:
+    """Return (center, radius) of the circumcircle of three points, or (None, None) if collinear."""
+    ax, ay = p1
+    bx, by = p2
+    cx, cy = p3
+    D = 2 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by))
+    if abs(D) < 1e-10:
+        return None, None
+    ux = (
+        (ax**2 + ay**2) * (by - cy)
+        + (bx**2 + by**2) * (cy - ay)
+        + (cx**2 + cy**2) * (ay - by)
+    ) / D
+    uy = (
+        (ax**2 + ay**2) * (cx - bx)
+        + (bx**2 + by**2) * (ax - cx)
+        + (cx**2 + cy**2) * (bx - ax)
+    ) / D
+    return (ux, uy), math.hypot(ax - ux, ay - uy)
+
+
 class GCodeParser:
     """Parse G-code files and add travel distance comments with dynamic Z adjustment."""
 
@@ -21,24 +46,17 @@ class GCodeParser:
         z_down: float = 0.0,
         feed_rate_draw: int = 4000,
         feed_rate_z: int = 1500,
+        arc_fitting: bool = False,
+        arc_tolerance: float = 0.05,
     ):
-        """
-        Initialize the parser.
-
-        Args:
-            long_distance_z: Z height for long travels (default: 10.0mm)
-            short_distance_z: Z height for short travels (default: 4.0mm)
-            short_distance_mm: Distance threshold in mm to determine short vs long travel (default: 1.5mm)
-            z_down: Z height when pen is down (default: 0.0mm)
-            feed_rate_draw: Feed rate for drawing movements (default: 4000 mm/min)
-            feed_rate_z: Feed rate for Z-axis movements (default: 1500 mm/min)
-        """
         self.long_distance_z = long_distance_z
         self.short_distance_z = short_distance_z
         self.short_distance_mm = short_distance_mm
         self.z_down = z_down
         self.feed_rate_draw = feed_rate_draw
         self.feed_rate_z = feed_rate_z
+        self.arc_fitting = arc_fitting
+        self.arc_tolerance = arc_tolerance
 
     def parse_start_line_comment(self, line: str) -> Optional[Tuple[float, float]]:
         """
@@ -189,21 +207,20 @@ class GCodeParser:
         if not input_file.exists():
             raise FileNotFoundError(f"Input file not found: {input_file}")
 
-        # Read all lines first
         with open(input_file, "r", encoding="utf-8") as infile:
             lines = infile.readlines()
 
-        # Optimize Z heights based on travel distance
         processed_lines = self._optimize_z_heights(lines)
 
-        # Remove the boundary squares between layer 0 markers
         processed_lines = self.remove_code_between_markers(
             processed_lines,
             start_marker="; --- Start Layer 0 ---",
             end_marker="; --- End Layer 0 ---",
         )
 
-        # Write back to the same file
+        if self.arc_fitting:
+            processed_lines = self._compress_arcs(processed_lines)
+
         with open(input_file, "w", encoding="utf-8") as outfile:
             outfile.writelines(processed_lines)
 
@@ -288,6 +305,153 @@ class GCodeParser:
                 i += 1
 
         return processed_lines
+
+
+    def _compress_arcs(self, lines: list[str]) -> list[str]:
+        """
+        Replace runs of consecutive G1 draw moves with G2/G3 arc commands where the
+        points lie on a circle within arc_tolerance mm.
+        """
+        result: list[str] = []
+        pen_down = False
+        current_x = 0.0
+        current_y = 0.0
+        # run_points[0] is the G0 destination (implicit arc start already in position).
+        # run_points[1:] are the subsequent draw targets; run_lines[k] moves to run_points[k+1].
+        run_points: list[Tuple[float, float]] = []
+        run_lines: list[str] = []
+
+        def flush():
+            if run_lines:
+                result.extend(self._fit_arcs_in_run(run_points, run_lines))
+            run_points.clear()
+            run_lines.clear()
+
+        for line in lines:
+            lu = line.upper()
+
+            # G0 travel: update position, pass through as-is
+            if lu.strip().startswith("G0") and "X" in lu and "Y" in lu:
+                flush()
+                xm = re.search(r"X([-+]?\d*\.?\d+)", lu)
+                ym = re.search(r"Y([-+]?\d*\.?\d+)", lu)
+                if xm and ym:
+                    current_x = float(xm.group(1))
+                    current_y = float(ym.group(1))
+                result.append(line)
+                continue
+
+            # Pen down: start a new run at current position
+            if "PEN DOWN" in lu:
+                flush()
+                pen_down = True
+                run_points.append((current_x, current_y))
+                result.append(line)
+                continue
+
+            # Pen up: flush current run then pass through
+            if "PEN UP" in lu:
+                flush()
+                pen_down = False
+                result.append(line)
+                continue
+
+            # G1 XY draw move (no Z): collect into run while pen is down
+            if (
+                pen_down
+                and lu.strip().startswith("G1")
+                and "X" in lu
+                and "Y" in lu
+                and "Z" not in lu
+            ):
+                xm = re.search(r"X([-+]?\d*\.?\d+)", lu)
+                ym = re.search(r"Y([-+]?\d*\.?\d+)", lu)
+                if xm and ym:
+                    current_x = float(xm.group(1))
+                    current_y = float(ym.group(1))
+                    run_points.append((current_x, current_y))
+                    run_lines.append(line)
+                    continue
+
+            # Everything else: flush and pass through
+            flush()
+            result.append(line)
+
+        flush()
+        return result
+
+    def _fit_arcs_in_run(
+        self,
+        points: list[Tuple[float, float]],
+        original_lines: list[str],
+    ) -> list[str]:
+        """
+        Compress a draw run into G2/G3 arcs where possible.
+        points[0] is the implicit start; original_lines[k] targets points[k+1].
+        """
+        if len(points) < 3:
+            return list(original_lines)
+
+        result: list[str] = []
+        i = 0
+
+        while i < len(points) - 1:
+            best_end = i + 1
+
+            for end in range(i + 2, len(points) + 1):
+                if self._points_fit_arc(points[i:end]):
+                    best_end = end - 1
+                else:
+                    break
+
+            if best_end > i + 1:
+                result.append(
+                    self._make_arc_command(points[i], points[best_end], points[i : best_end + 1])
+                )
+                i = best_end
+            else:
+                result.append(original_lines[i])
+                i += 1
+
+        return result
+
+    def _points_fit_arc(self, points: list[Tuple[float, float]]) -> bool:
+        """Return True if all points lie within arc_tolerance of a common circle."""
+        if len(points) < 3:
+            return True
+        p0, pm, pn = points[0], points[len(points) // 2], points[-1]
+        center, radius = _circumcircle(p0, pm, pn)
+        if center is None or radius is None or radius > 10_000:
+            return False
+        cx, cy = center
+        for p in points:
+            if abs(math.hypot(p[0] - cx, p[1] - cy) - radius) > self.arc_tolerance:
+                return False
+        return True
+
+    def _make_arc_command(
+        self,
+        start: Tuple[float, float],
+        end: Tuple[float, float],
+        points: list[Tuple[float, float]],
+    ) -> str:
+        """Emit a G2 or G3 command from start to end using I/J offsets to the arc center."""
+        pm = points[len(points) // 2]
+        center, _ = _circumcircle(start, pm, end)
+        assert center is not None
+        I = center[0] - start[0]
+        J = center[1] - start[1]
+
+        # Shoelace signed area: positive → CCW (G3), negative → CW (G2)
+        area = 0.0
+        n = len(points)
+        for k in range(n):
+            x1, y1 = points[k]
+            x2, y2 = points[(k + 1) % n]
+            area += x1 * y2 - x2 * y1
+
+        cmd = "G3" if area > 0 else "G2"
+        return f"{cmd} X{end[0]:.4f} Y{end[1]:.4f} I{I:.4f} J{J:.4f} F{self.feed_rate_draw}\n"
 
 
 def main():

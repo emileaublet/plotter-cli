@@ -82,6 +82,8 @@ def load_settings():
                 "feed_rate_z": 2400,
                 "registration_marks_length": 4,
                 "height_map_path": None,
+                "arc_fitting": False,
+                "arc_tolerance": 0.05,
             },
             "papers": [],
         }

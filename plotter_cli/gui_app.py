@@ -167,6 +167,8 @@ def get_settings():
             "registration_marks_length": settings["general"]["registration_marks_length"],
             "linemerge": settings["general"].get("linemerge", True),
             "reloop": settings["general"].get("reloop", False),
+            "arc_fitting": settings["general"].get("arc_fitting", False),
+            "arc_tolerance": settings["general"].get("arc_tolerance", 0.05),
             "path_sorting": settings["general"].get("path_sorting", True),
             "path_reversing": settings["general"].get("path_reversing", True),
             "height_map_path": settings["general"].get("height_map_path") or "",
@@ -212,6 +214,10 @@ def update_settings():
             settings["general"]["linemerge"] = bool(data["linemerge"])
         if "reloop" in data:
             settings["general"]["reloop"] = bool(data["reloop"])
+        if "arc_fitting" in data:
+            settings["general"]["arc_fitting"] = bool(data["arc_fitting"])
+        if "arc_tolerance" in data:
+            settings["general"]["arc_tolerance"] = float(data["arc_tolerance"])
         if "path_sorting" in data:
             settings["general"]["path_sorting"] = bool(data["path_sorting"])
         if "path_reversing" in data:

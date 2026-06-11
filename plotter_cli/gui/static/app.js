@@ -380,6 +380,13 @@ class PlotterStudio {
       document.getElementById('settings-reloop').checked = this.settings.reloop === true;
       document.getElementById('settings-path-sorting').checked = this.settings.path_sorting !== false;
       document.getElementById('settings-path-reversing').checked = this.settings.path_reversing !== false;
+      const arcFittingCb = document.getElementById('settings-arc-fitting');
+      arcFittingCb.checked = this.settings.arc_fitting === true;
+      document.getElementById('settings-arc-tolerance').value = this.settings.arc_tolerance ?? 0.05;
+      document.getElementById('settings-arc-tolerance-group').style.display = arcFittingCb.checked ? '' : 'none';
+      arcFittingCb.onchange = () => {
+        document.getElementById('settings-arc-tolerance-group').style.display = arcFittingCb.checked ? '' : 'none';
+      };
       this.updateCalibrationStatusUI(this.settings);
     }
 
@@ -403,6 +410,8 @@ class PlotterStudio {
         registration_marks_length: parseFloat(document.getElementById('settings-registration-marks-length').value),
         linemerge: document.getElementById('settings-linemerge').checked,
         reloop: document.getElementById('settings-reloop').checked,
+        arc_fitting: document.getElementById('settings-arc-fitting').checked,
+        arc_tolerance: parseFloat(document.getElementById('settings-arc-tolerance').value) || 0.05,
         path_sorting: document.getElementById('settings-path-sorting').checked,
         path_reversing: document.getElementById('settings-path-reversing').checked,
         height_map_path: (document.getElementById('settings-height-map-path')?.value ?? '').trim(),
