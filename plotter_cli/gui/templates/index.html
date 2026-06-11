@@ -410,6 +410,12 @@
                 <h3 style="margin: 0 0 1rem 0; font-size: 1rem; font-weight: 600; color: var(--foreground);">Path Optimization</h3>
                 <div class="form-group">
                   <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; font-size: 0.85rem; color: var(--foreground);">
+                    <input type="checkbox" id="settings-linemerge" checked>
+                    Line merging (join collinear segments to reduce pen lifts)
+                  </label>
+                </div>
+                <div class="form-group">
+                  <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; font-size: 0.85rem; color: var(--foreground);">
                     <input type="checkbox" id="settings-path-sorting" checked>
                     Path sorting (reorder paths to minimize travel)
                   </label>
@@ -418,6 +424,12 @@
                   <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; font-size: 0.85rem; color: var(--foreground);">
                     <input type="checkbox" id="settings-path-reversing" checked>
                     Path reversing (allow reversing path direction)
+                  </label>
+                </div>
+                <div class="form-group">
+                  <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; font-size: 0.85rem; color: var(--foreground);">
+                    <input type="checkbox" id="settings-reloop">
+                    Reloop (randomize seam position on closed paths)
                   </label>
                 </div>
               </div>

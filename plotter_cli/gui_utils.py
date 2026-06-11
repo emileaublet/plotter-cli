@@ -439,6 +439,8 @@ def process_svg_to_gcode(
     area_max_x = settings["general"].get("area_width", 880)
     area_max_y = settings["general"].get("area_height", 470)
     registration_marks_length = settings["general"].get("registration_marks_length", 4)
+    linemerge = settings["general"].get("linemerge", True)
+    reloop = settings["general"].get("reloop", False)
     path_sorting = settings["general"].get("path_sorting", True)
     path_reversing = settings["general"].get("path_reversing", True)
 
@@ -470,7 +472,11 @@ def process_svg_to_gcode(
             "999",
         ]
 
-        vpype_command.append("linemerge")
+        if linemerge:
+            vpype_command.append("linemerge")
+
+        if reloop:
+            vpype_command.append("reloop")
 
         if path_sorting:
             vpype_command.append("linesort")

@@ -165,6 +165,8 @@ def get_settings():
             "feed_rate_travel": settings["general"]["feed_rate_travel"],
             "feed_rate_z": settings["general"]["feed_rate_z"],
             "registration_marks_length": settings["general"]["registration_marks_length"],
+            "linemerge": settings["general"].get("linemerge", True),
+            "reloop": settings["general"].get("reloop", False),
             "path_sorting": settings["general"].get("path_sorting", True),
             "path_reversing": settings["general"].get("path_reversing", True),
             "height_map_path": settings["general"].get("height_map_path") or "",
@@ -206,6 +208,10 @@ def update_settings():
             settings["general"]["feed_rate_z"] = int(data["feed_rate_z"])
         if "registration_marks_length" in data:
             settings["general"]["registration_marks_length"] = float(data["registration_marks_length"])
+        if "linemerge" in data:
+            settings["general"]["linemerge"] = bool(data["linemerge"])
+        if "reloop" in data:
+            settings["general"]["reloop"] = bool(data["reloop"])
         if "path_sorting" in data:
             settings["general"]["path_sorting"] = bool(data["path_sorting"])
         if "path_reversing" in data:

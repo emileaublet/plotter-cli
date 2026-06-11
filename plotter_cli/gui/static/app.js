@@ -376,6 +376,8 @@ class PlotterStudio {
       document.getElementById('settings-registration-marks-length').value = this.settings.registration_marks_length;
       const hmp = document.getElementById('settings-height-map-path');
       if (hmp) hmp.value = this.settings.height_map_path || '';
+      document.getElementById('settings-linemerge').checked = this.settings.linemerge !== false;
+      document.getElementById('settings-reloop').checked = this.settings.reloop === true;
       document.getElementById('settings-path-sorting').checked = this.settings.path_sorting !== false;
       document.getElementById('settings-path-reversing').checked = this.settings.path_reversing !== false;
       this.updateCalibrationStatusUI(this.settings);
@@ -399,6 +401,8 @@ class PlotterStudio {
         feed_rate_travel: parseInt(document.getElementById('settings-feed-rate-travel').value),
         feed_rate_z: parseInt(document.getElementById('settings-feed-rate-z').value),
         registration_marks_length: parseFloat(document.getElementById('settings-registration-marks-length').value),
+        linemerge: document.getElementById('settings-linemerge').checked,
+        reloop: document.getElementById('settings-reloop').checked,
         path_sorting: document.getElementById('settings-path-sorting').checked,
         path_reversing: document.getElementById('settings-path-reversing').checked,
         height_map_path: (document.getElementById('settings-height-map-path')?.value ?? '').trim(),
