@@ -356,13 +356,13 @@ class GCodeParser:
                 result.append(line)
                 continue
 
-            # G1 XY draw move (no Z): collect into run while pen is down
+            # G1 XY draw move: collect into run while pen is down.
+            # Z may be present when surface calibration is active — accept it.
             if (
                 pen_down
                 and lu.strip().startswith("G1")
                 and "X" in lu
                 and "Y" in lu
-                and "Z" not in lu
             ):
                 xm = re.search(r"X([-+]?\d*\.?\d+)", lu)
                 ym = re.search(r"Y([-+]?\d*\.?\d+)", lu)
