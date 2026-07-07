@@ -2175,7 +2175,7 @@ class PlotterStudio {
         }
       }
 
-      // Proceed with export
+      // Proceed with export — response is a stream of NDJSON progress events
       const response = await fetch('/api/export', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2184,11 +2184,41 @@ class PlotterStudio {
       });
 
       if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Export failed');
+        let msg = 'Export failed';
+        try { msg = (await response.json()).error || msg; } catch (e) {}
+        throw new Error(msg);
       }
 
-      const result = await response.json();
+      // Read newline-delimited JSON events and update the button per step
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let result = null;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        let nl;
+        while ((nl = buffer.indexOf('\n')) >= 0) {
+          const line = buffer.slice(0, nl).trim();
+          buffer = buffer.slice(nl + 1);
+          if (!line) continue;
+
+          const msg = JSON.parse(line);
+          if (msg.type === 'progress') {
+            const pct = (msg.fraction != null) ? ` ${Math.round(msg.fraction * 100)}%` : '';
+            exportText.textContent = `${msg.step}/${msg.total} · ${msg.label}${pct}`;
+          } else if (msg.type === 'done') {
+            result = msg;
+          } else if (msg.type === 'error') {
+            throw new Error(msg.error || 'Export failed');
+          }
+        }
+      }
+
+      if (!result) throw new Error('Export ended without a result');
       showToast(`Exported to: ${result.output_folder}`, 'success', 5000);
     } catch (error) {
       // Don't show error if user cancelled
@@ -2336,7 +2366,7 @@ class PlotterStudio {
   }
 
   async updateCalGridInfo() {
-    const spacing = parseFloat(document.getElementById('cal-grid-spacing')?.value) || 30;
+    const spacing = parseFloat(document.getElementById('cal-grid-spacing')?.value) || 60;
     try {
       const resp = await fetch(`/api/surface-cal/grid-info?spacing=${spacing}`);
       const data = await resp.json();
@@ -2346,8 +2376,9 @@ class PlotterStudio {
   }
 
   async calGenerateGrid() {
-    const spacing = parseFloat(document.getElementById('cal-grid-spacing')?.value) || 30;
-    const crossSize = parseFloat(document.getElementById('cal-grid-cross-size')?.value) || 4;
+    const spacing = parseFloat(document.getElementById('cal-grid-spacing')?.value) || 60;
+    const crossSize = parseFloat(document.getElementById('cal-grid-cross-size')?.value) || 20;
+    const shape = document.getElementById('cal-grid-shape')?.value || 'cross';
     const applyMap = document.getElementById('cal-grid-apply-map')?.checked;
     const folder = await this.pickFolder();
     if (!folder) return;
@@ -2355,7 +2386,7 @@ class PlotterStudio {
       const resp = await fetch('/api/surface-cal/grid', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ output_folder: folder, spacing, cross_size: crossSize, apply_map: applyMap }),
+        body: JSON.stringify({ output_folder: folder, spacing, cross_size: crossSize, shape, apply_map: applyMap }),
       });
       const result = await resp.json();
       if (!resp.ok) throw new Error(result.error);
@@ -2366,7 +2397,7 @@ class PlotterStudio {
   }
 
   async calBuildSampleGrid() {
-    const spacing = parseFloat(document.getElementById('cal-sample-spacing')?.value) || 30;
+    const spacing = parseFloat(document.getElementById('cal-sample-spacing')?.value) || 60;
     try {
       const resp = await fetch(`/api/surface-cal/grid-info?spacing=${spacing}`);
       const data = await resp.json();
@@ -2399,7 +2430,7 @@ class PlotterStudio {
       l.textContent = this.calSampleXCoords[j].toFixed(0);
       container.appendChild(l);
     }
-    for (let i = 0; i < this.calSampleNy; i++) {
+    for (let i = this.calSampleNy - 1; i >= 0; i--) {
       const yl = document.createElement('div');
       yl.className = 'cal-grid-axis-label';
       yl.textContent = this.calSampleYCoords[i].toFixed(0);
@@ -2449,7 +2480,7 @@ class PlotterStudio {
 
   async calSaveMap() {
     if (!this.calSamplePoints) { await showAlert('Error', 'No sample data', 'error'); return; }
-    const spacing = parseFloat(document.getElementById('cal-sample-spacing')?.value) || 30;
+    const spacing = parseFloat(document.getElementById('cal-sample-spacing')?.value) || 60;
     const deltaZ = parseFloat(document.getElementById('cal-sample-delta-z')?.value) || 0.2;
     const mapData = {
       version: 1, grid_spacing: spacing, delta_z_mm: deltaZ,

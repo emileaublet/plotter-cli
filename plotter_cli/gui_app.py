@@ -20,12 +20,22 @@ import math
 import os
 import time
 import json
+import queue
 import platform
 import subprocess
 import tempfile
+import threading
 import uuid
 from pathlib import Path
-from flask import Flask, render_template, request, jsonify, send_file
+from flask import (
+    Flask,
+    render_template,
+    request,
+    jsonify,
+    send_file,
+    Response,
+    stream_with_context,
+)
 from werkzeug.utils import secure_filename
 
 from .utils import (
@@ -46,6 +56,7 @@ from .gui_utils import (
     process_svg_to_gcode,
 )
 from .surface_calibration import (
+    SHAPES,
     generate_calibration_grid_gcode,
     apply_height_map_to_gcode_text,
     grid_dimensions,
@@ -1107,25 +1118,39 @@ def _validate_export_papers():
     return export_svgs
 
 
-def _run_export_pipeline(export_svgs, output_folder, settings):
-    """Run SVG combine + gcode pipeline. Returns dict with file paths."""
+def _run_export_pipeline(export_svgs, output_folder, settings, emit=None):
+    """
+    Run SVG combine + gcode pipeline. Returns dict with file paths.
+
+    emit(step, total, label, fraction) is called for progress feedback;
+    fraction (0..1) is the sub-progress within a step, or None for whole steps.
+    Defaults to a no-op so non-streaming callers (and tests) work unchanged.
+    """
+    if emit is None:
+        emit = lambda step, total, label, fraction=None: None
+
+    TOTAL = 5
     canvas_width = settings["general"]["area_width"]
     canvas_height = settings["general"]["area_height"]
 
-    print(f"EXPORT: Combining {len(export_svgs)} SVG(s) into combined.svg...")
+    emit(1, TOTAL, f"Combining {len(export_svgs)} SVG(s)")
     combined_svg_path = os.path.join(output_folder, "combined.svg")
     generate_combined_svg(export_svgs, canvas_width, canvas_height, combined_svg_path)
 
-    print(f"EXPORT: Running vpype to generate G-code...")
+    emit(2, TOTAL, "Generating G-code (vpype)")
     gcode_files = process_svg_to_gcode(
-        combined_svg_path, canvas_width, canvas_height, output_folder
+        combined_svg_path,
+        canvas_width,
+        canvas_height,
+        output_folder,
+        progress_callback=lambda label, fraction: emit(3, TOTAL, label, fraction),
     )
 
-    print(f"EXPORT: Generating guide G-code...")
+    emit(4, TOTAL, "Generating guide G-code")
     guide_gcode_path = os.path.join(output_folder, "guide.gcode")
     generate_guide_gcode(list(paper_store.values()), guide_gcode_path, settings)
 
-    print(f"EXPORT: Generating stats.txt...")
+    emit(5, TOTAL, "Writing stats.txt")
     stats_path = os.path.join(output_folder, "stats.txt")
     generate_stats_file(stats_path, export_svgs, gcode_files, canvas_width, canvas_height)
 
@@ -1151,39 +1176,103 @@ def _build_export_response(output_folder, pipeline_result):
 
 @app.route("/api/export", methods=["POST"])
 def export():
-    """Export canvas to combined SVG and G-code files."""
+    """
+    Export canvas to combined SVG and G-code files.
+
+    Streams newline-delimited JSON (NDJSON) progress events so the frontend can
+    show step N/X feedback. The pipeline runs in a worker thread and pushes
+    events onto a queue; this route drains the queue and yields each as a line.
+    Event types: "progress" (step/total/label), "done" (full result), "error".
+    """
     data = request.json
-    output_folder = data.get("output_folder")
+    output_folder = data.get("output_folder") or tempfile.mkdtemp(prefix="plotter_export_")
 
-    if not output_folder:
-        output_folder = tempfile.mkdtemp(prefix="plotter_export_")
-
-    # Log output location
     print(f"\n{'='*60}")
     print(f"EXPORT: Output folder: {output_folder}")
     print(f"{'='*60}")
 
-    try:
-        export_svgs = _validate_export_papers()
-        if not export_svgs:
-            return jsonify({"error": "No assigned SVGs to export"}), 400
+    events: "queue.Queue" = queue.Queue()
 
-        settings = load_settings()
-        pipeline_result = _run_export_pipeline(export_svgs, output_folder, settings)
+    def worker():
+        from rich.progress import (
+            Progress,
+            TextColumn,
+            BarColumn,
+            TaskProgressColumn,
+            TimeElapsedColumn,
+        )
 
-        # Log all generated files
-        print(f"EXPORT: Generated files:")
-        print(f"  - Combined SVG: {pipeline_result['combined_svg']}")
-        print(f"  - Guide G-code: {pipeline_result['guide_gcode']}")
-        print(f"  - Stats: {pipeline_result['stats']}")
-        for gcode_file in pipeline_result["gcode_files"]:
-            print(f"  - G-code: {gcode_file}")
-        print(f"{'='*60}\n")
+        try:
+            export_svgs = _validate_export_papers()
+            if not export_svgs:
+                events.put({"type": "error", "error": "No assigned SVGs to export"})
+                return
+            settings = load_settings()
 
-        return jsonify(_build_export_response(output_folder, pipeline_result))
+            # rich.Progress renders two in-place bars in the terminal: an overall
+            # step bar and the current sub-task. The same events are streamed to
+            # the GUI as NDJSON. Only this worker thread touches the display.
+            with Progress(
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                TaskProgressColumn(),
+                TimeElapsedColumn(),
+            ) as prog:
+                overall = prog.add_task("[bold cyan]Export", total=1)
+                current = prog.add_task("starting…", total=None)
 
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+                def emit(step, total, label, fraction=None):
+                    events.put(
+                        {
+                            "type": "progress",
+                            "step": step,
+                            "total": total,
+                            "label": label,
+                            "fraction": fraction,
+                        }
+                    )
+                    prog.update(overall, total=total, completed=step)
+                    if fraction is None:
+                        prog.update(current, description=label, total=None)
+                    else:
+                        prog.update(
+                            current,
+                            description=label,
+                            total=100,
+                            completed=fraction * 100,
+                        )
+
+                pipeline_result = _run_export_pipeline(
+                    export_svgs, output_folder, settings, emit
+                )
+                prog.update(current, description="[green]Done", total=100, completed=100)
+
+            print(f"EXPORT: Generated files:")
+            print(f"  - Combined SVG: {pipeline_result['combined_svg']}")
+            print(f"  - Guide G-code: {pipeline_result['guide_gcode']}")
+            print(f"  - Stats: {pipeline_result['stats']}")
+            for gcode_file in pipeline_result["gcode_files"]:
+                print(f"  - G-code: {gcode_file}")
+            print(f"{'='*60}\n")
+
+            events.put(
+                {"type": "done", **_build_export_response(output_folder, pipeline_result)}
+            )
+        except Exception as e:
+            events.put({"type": "error", "error": str(e)})
+        finally:
+            events.put(None)  # sentinel: stream complete
+
+    threading.Thread(target=worker, daemon=True).start()
+
+    def stream():
+        while True:
+            item = events.get()
+            if item is None:
+                break
+            yield json.dumps(item) + "\n"
+
+    return Response(stream_with_context(stream()), mimetype="application/x-ndjson")
 
 
 # --- Surface calibration API routes ---
@@ -1218,6 +1307,9 @@ def surface_cal_grid():
     output_folder = data.get("output_folder")
     spacing = float(data.get("spacing", 30))
     cross_size = float(data.get("cross_size", 4))
+    shape = str(data.get("shape", "cross")).strip().lower()
+    if shape not in SHAPES:
+        shape = "cross"
     apply_map = bool(data.get("apply_map"))
 
     if not output_folder:
@@ -1231,6 +1323,7 @@ def surface_cal_grid():
         aw, ah,
         grid_spacing_mm=spacing,
         cross_size_mm=cross_size,
+        shape=shape,
         z_up=float(g.get("z_up_long", 12)),
         z_down=float(g.get("z_down", 0)),
         feed_rate_draw=float(g.get("feed_rate_draw", 3000)),

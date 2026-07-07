@@ -166,12 +166,104 @@ class HeightMap:
         return len(coords) - 2
 
 
+# --- Calibration mark shapes ---
+
+# A "stroke" is a polyline: a list of (x, y) points drawn in one pen-down..pen-up
+# sequence. A shape function receives the mark center (cx, cy) and the available
+# half-extents (x_lo, x_hi, y_lo, y_hi), already clamped to the bed so marks never
+# run off the edge, and returns a list of strokes. Marks are centered on (cx, cy)
+# and scaled to fit the clamped extents (a circle/square becomes asymmetric near a
+# corner — the same tradeoff the X already makes).
+
+Point = Tuple[float, float]
+Stroke = List[Point]
+
+
+def _shape_cross(
+    cx: float, cy: float, x_lo: float, x_hi: float, y_lo: float, y_hi: float
+) -> List[Stroke]:
+    return [
+        [(cx - x_lo, cy - y_lo), (cx + x_hi, cy + y_hi)],
+        [(cx - x_lo, cy + y_hi), (cx + x_hi, cy - y_lo)],
+    ]
+
+
+def _shape_plus(
+    cx: float, cy: float, x_lo: float, x_hi: float, y_lo: float, y_hi: float
+) -> List[Stroke]:
+    return [
+        [(cx - x_lo, cy), (cx + x_hi, cy)],
+        [(cx, cy - y_lo), (cx, cy + y_hi)],
+    ]
+
+
+def _shape_square(
+    cx: float, cy: float, x_lo: float, x_hi: float, y_lo: float, y_hi: float
+) -> List[Stroke]:
+    return [
+        [
+            (cx - x_lo, cy - y_lo),
+            (cx + x_hi, cy - y_lo),
+            (cx + x_hi, cy + y_hi),
+            (cx - x_lo, cy + y_hi),
+            (cx - x_lo, cy - y_lo),
+        ]
+    ]
+
+
+def _shape_circle(
+    cx: float, cy: float, x_lo: float, x_hi: float, y_lo: float, y_hi: float
+) -> List[Stroke]:
+    import math
+
+    segments = 24
+    pts: Stroke = []
+    for k in range(segments + 1):
+        theta = 2.0 * math.pi * k / segments
+        c = math.cos(theta)
+        s = math.sin(theta)
+        ex = x_hi if c >= 0 else x_lo
+        ey = y_hi if s >= 0 else y_lo
+        pts.append((cx + ex * c, cy + ey * s))
+    return [pts]
+
+
+def _shape_swirl(
+    cx: float, cy: float, x_lo: float, x_hi: float, y_lo: float, y_hi: float
+) -> List[Stroke]:
+    import math
+
+    # Symmetric Archimedean spiral so the swirl reads as round, not skewed.
+    r_max = min(x_lo, x_hi, y_lo, y_hi)
+    if r_max <= 0:
+        return []
+    turns = 3.0
+    steps = 72
+    pts: Stroke = []
+    for k in range(steps + 1):
+        t = k / steps
+        theta = turns * 2.0 * math.pi * t
+        r = r_max * t
+        pts.append((cx + r * math.cos(theta), cy + r * math.sin(theta)))
+    return [pts]
+
+
+SHAPES = {
+    "cross": _shape_cross,
+    "plus": _shape_plus,
+    "square": _shape_square,
+    "circle": _shape_circle,
+    "swirl": _shape_swirl,
+}
+
+
 def generate_calibration_grid_gcode(
     area_width: float,
     area_height: float,
     *,
     grid_spacing_mm: float = 30.0,
     cross_size_mm: float = 4.0,
+    shape: str = "cross",
     z_up: float,
     z_down: float,
     feed_rate_draw: float,
@@ -180,9 +272,11 @@ def generate_calibration_grid_gcode(
 ) -> str:
     _, _, xs, ys = grid_dimensions(area_width, area_height, grid_spacing_mm)
     half = cross_size_mm / 2.0
+    shape_fn = SHAPES.get(shape, _shape_cross)
+    shape_name = shape if shape in SHAPES else "cross"
 
     lines: List[str] = [
-        "; Surface calibration grid — X marks at each sample point",
+        f"; Surface calibration grid — {shape_name} marks at each sample point",
         "G21 ; Set units to mm",
         "G90 ; Absolute positioning",
         f"G1 Z{z_up} F{feed_rate_z} ; Pen up",
@@ -192,25 +286,23 @@ def generate_calibration_grid_gcode(
 
     for yi, cy in enumerate(ys):
         for xi, cx in enumerate(xs):
-            # Asymmetric arms so crosses stay within the bed (no negative coords at corners)
+            # Asymmetric extents so marks stay within the bed (no negative coords at corners)
             x_lo = min(half, cx)
             x_hi = min(half, area_width - cx)
             y_lo = min(half, cy)
             y_hi = min(half, area_height - cy)
-            x1, y1 = cx - x_lo, cy - y_lo
-            x2, y2 = cx + x_hi, cy + y_hi
-            x3, y3 = cx - x_lo, cy + y_hi
-            x4, y4 = cx + x_hi, cy - y_lo
             lines.append(f"; Grid cell row={yi} col={xi} X={cx:.2f} Y={cy:.2f}")
-            lines.append(f"G0 X{cx:.4f} Y{cy:.4f} F{feed_rate_travel}")
-            lines.append(f"G1 Z{z_down} F{feed_rate_z} ; Pen down")
-            lines.append(f"G1 X{x1:.4f} Y{y1:.4f} F{feed_rate_draw} ; Draw")
-            lines.append(f"G1 X{x2:.4f} Y{y2:.4f} F{feed_rate_draw} ; Draw")
-            lines.append(f"G1 Z{z_up} F{feed_rate_z} ; Pen up")
-            lines.append(f"G0 X{x3:.4f} Y{y3:.4f} F{feed_rate_travel}")
-            lines.append(f"G1 Z{z_down} F{feed_rate_z} ; Pen down")
-            lines.append(f"G1 X{x4:.4f} Y{y4:.4f} F{feed_rate_draw} ; Draw")
-            lines.append(f"G1 Z{z_up} F{feed_rate_z} ; Pen up")
+            for stroke in shape_fn(cx, cy, x_lo, x_hi, y_lo, y_hi):
+                if len(stroke) < 2:
+                    continue
+                sx, sy = stroke[0]
+                lines.append(f"G0 X{sx:.4f} Y{sy:.4f} F{feed_rate_travel}")
+                lines.append(f"G1 Z{z_down} F{feed_rate_z} ; Pen down")
+                for px, py in stroke[1:]:
+                    lines.append(
+                        f"G1 X{px:.4f} Y{py:.4f} F{feed_rate_draw} ; Draw"
+                    )
+                lines.append(f"G1 Z{z_up} F{feed_rate_z} ; Pen up")
             lines.append("")
 
     lines.extend(

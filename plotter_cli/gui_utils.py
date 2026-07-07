@@ -8,7 +8,7 @@ import copy
 import subprocess
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Callable
 
 from .utils import (
     load_settings,
@@ -17,6 +17,18 @@ from .utils import (
 )
 from .gcode_parser import GCodeParser
 from .surface_calibration import apply_height_map_if_configured
+
+
+def _friendly_gcode_label(path: str) -> str:
+    """
+    Turn an exported G-code filename into a short color label for progress UI.
+
+    e.g. 'combined_#00259dc8_dark_blue.gcode' -> 'dark_blue'.
+    Falls back to the bare filename stem if the expected pattern is absent.
+    """
+    name = os.path.splitext(os.path.basename(path))[0]
+    parts = [p for p in name.split("_") if p != "combined" and not p.startswith("#")]
+    return "_".join(parts) or name
 
 
 def svg_to_png(svg_path: str, output_path: str = None, dpi: int = 150) -> Optional[str]:
@@ -409,6 +421,7 @@ def process_svg_to_gcode(
     canvas_height: float,
     output_folder: str,
     height_map_path: Optional[str] = None,
+    progress_callback: Optional[Callable[[str, Optional[float]], None]] = None,
 ) -> List[str]:
     """
     Process a combined SVG to G-code files (one per color).
@@ -562,9 +575,21 @@ def process_svg_to_gcode(
             arc_tolerance=arc_tolerance,
         )
 
-        for gcode_file in gcode_files:
+        total = len(gcode_files)
+        for idx, gcode_file in enumerate(gcode_files, 1):
+            color = _friendly_gcode_label(gcode_file)
+
+            def file_progress(phase, frac, color=color, idx=idx, total=total):
+                if progress_callback:
+                    progress_callback(
+                        f"Optimizing {color} ({idx}/{total}) — {phase}", frac
+                    )
+
             try:
-                parser.parse_file(Path(gcode_file))
+                parser.parse_file(
+                    Path(gcode_file),
+                    progress_callback=file_progress if progress_callback else None,
+                )
             except Exception as e:
                 print(f"Warning: Failed to optimize {gcode_file}: {e}")
 

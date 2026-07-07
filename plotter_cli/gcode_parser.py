@@ -48,6 +48,8 @@ class GCodeParser:
         feed_rate_z: int = 1500,
         arc_fitting: bool = False,
         arc_tolerance: float = 0.05,
+        min_arc_segments: int = 4,
+        max_arc_radius: float = 2000.0,
     ):
         self.long_distance_z = long_distance_z
         self.short_distance_z = short_distance_z
@@ -57,6 +59,10 @@ class GCodeParser:
         self.feed_rate_z = feed_rate_z
         self.arc_fitting = arc_fitting
         self.arc_tolerance = arc_tolerance
+        # An arc must replace at least this many G1 segments to be worth emitting.
+        self.min_arc_segments = min_arc_segments
+        # Runs fitting a circle larger than this (mm) are treated as straight lines.
+        self.max_arc_radius = max_arc_radius
 
     def parse_start_line_comment(self, line: str) -> Optional[Tuple[float, float]]:
         """
@@ -197,12 +203,15 @@ class GCodeParser:
 
         return result_lines
 
-    def parse_file(self, input_file: Path) -> None:
+    def parse_file(self, input_file: Path, progress_callback=None) -> None:
         """
         Parse a G-code file and optimize Z heights based on travel distance.
 
         Args:
             input_file: Input G-code file path to modify
+            progress_callback: Optional fn(phase: str, fraction: float) called
+                during the heavy phases (Z-optimization, arc fitting). Throttled
+                to ~5% steps so it can drive a live progress display.
         """
         if not input_file.exists():
             raise FileNotFoundError(f"Input file not found: {input_file}")
@@ -210,7 +219,19 @@ class GCodeParser:
         with open(input_file, "r", encoding="utf-8") as infile:
             lines = infile.readlines()
 
-        processed_lines = self._optimize_z_heights(lines)
+        # Throttle: only forward a report when its phase or 5%-bucket changes.
+        last_bucket = [None]
+
+        def report(phase: str, fraction: float) -> None:
+            if progress_callback is None:
+                return
+            frac = max(0.0, min(1.0, fraction))
+            bucket = (phase, int(frac * 100) // 5)
+            if bucket != last_bucket[0]:
+                last_bucket[0] = bucket
+                progress_callback(phase, frac)
+
+        processed_lines = self._optimize_z_heights(lines, report)
 
         processed_lines = self.remove_code_between_markers(
             processed_lines,
@@ -219,25 +240,35 @@ class GCodeParser:
         )
 
         if self.arc_fitting:
-            processed_lines = self._compress_arcs(processed_lines)
+            processed_lines = self._compress_arcs(processed_lines, report)
+
+        if progress_callback is not None:
+            progress_callback("writing", 1.0)
 
         with open(input_file, "w", encoding="utf-8") as outfile:
             outfile.writelines(processed_lines)
 
-    def _optimize_z_heights(self, lines: list[str]) -> list[str]:
+    def _optimize_z_heights(self, lines: list[str], report=None) -> list[str]:
         """
         Optimize Z heights based on travel distance between paths.
 
         Args:
             lines: List of G-code lines
+            report: Optional fn(phase, fraction) for progress reporting.
 
         Returns:
             Modified list with optimized Z heights
         """
         processed_lines = []
         i = 0
+        total = len(lines)
+        next_report = 0
+        report_step = max(1, total // 50)
 
         while i < len(lines):
+            if report is not None and i >= next_report:
+                report("Z-optimization", i / total if total else 1.0)
+                next_report = i + report_step
             current_line = lines[i]
 
             # Look for Start Line comment
@@ -307,7 +338,7 @@ class GCodeParser:
         return processed_lines
 
 
-    def _compress_arcs(self, lines: list[str]) -> list[str]:
+    def _compress_arcs(self, lines: list[str], report=None) -> list[str]:
         """
         Replace runs of consecutive G1 draw moves with G2/G3 arc commands where the
         points lie on a circle within arc_tolerance mm.
@@ -327,7 +358,14 @@ class GCodeParser:
             run_points.clear()
             run_lines.clear()
 
-        for line in lines:
+        total = len(lines)
+        next_report = 0
+        report_step = max(1, total // 50)
+
+        for idx, line in enumerate(lines):
+            if report is not None and idx >= next_report:
+                report("arc fitting", idx / total if total else 1.0)
+                next_report = idx + report_step
             lu = line.upper()
 
             # G0 travel: update position, pass through as-is
@@ -388,25 +426,67 @@ class GCodeParser:
         """
         Compress a draw run into G2/G3 arcs where possible.
         points[0] is the implicit start; original_lines[k] targets points[k+1].
+
+        For each start, the longest fitting arc is found by exponential search
+        (probe windows i+3, i+4, i+6, i+10, …) followed by a binary search of
+        the failing gap — O(L log L) per arc instead of O(L²). Arc-fitting is
+        treated as monotone in window length; since every emitted arc is still
+        fully validated by _fit_arc, a rare non-monotone case can only yield a
+        slightly shorter arc, never an incorrect one.
         """
         if len(points) < 3:
             return list(original_lines)
 
         result: list[str] = []
         i = 0
+        n = len(points)
 
-        while i < len(points) - 1:
-            best_end = i + 1
+        while i < n - 1:
+            # Not enough points remain to form a circle → emit the plain move.
+            if n - i < 3:
+                result.append(original_lines[i])
+                i += 1
+                continue
 
-            for end in range(i + 2, len(points) + 1):
-                if self._points_fit_arc(points[i:end]):
-                    best_end = end - 1
-                else:
-                    break
+            good_hi = None
+            good_fit = None
 
-            if best_end > i + 1:
+            # Smallest window (3 points). If even this fails, there's no arc here.
+            first_fit = self._fit_arc(points, i, i + 3)
+            if first_fit is not None:
+                good_hi, good_fit = i + 3, first_fit
+
+                hi = i + 3
+                jump = 1
+                while good_hi is not None:
+                    nxt = min(hi + jump, n)
+                    fit = self._fit_arc(points, i, nxt)
+                    if fit is not None:
+                        good_hi, good_fit = nxt, fit
+                        if nxt == n:
+                            break  # can't grow further
+                        hi = nxt
+                        jump *= 2
+                    else:
+                        # Boundary is between hi (good) and nxt (bad): binary search.
+                        binlo, binhi = hi, nxt
+                        while binhi - binlo > 1:
+                            mid = (binlo + binhi) // 2
+                            fmid = self._fit_arc(points, i, mid)
+                            if fmid is not None:
+                                binlo, good_hi, good_fit = mid, mid, fmid
+                            else:
+                                binhi = mid
+                        break
+
+            if good_fit is not None and (good_hi - 1 - i) >= self.min_arc_segments:
+                cmd, center = good_fit
+                best_end = good_hi - 1
+                ex, ey = points[best_end]
+                I = center[0] - points[i][0]
+                J = center[1] - points[i][1]
                 result.append(
-                    self._make_arc_command(points[i], points[best_end], points[i : best_end + 1])
+                    f"{cmd} X{ex:.4f} Y{ey:.4f} I{I:.4f} J{J:.4f} F{self.feed_rate_draw}\n"
                 )
                 i = best_end
             else:
@@ -415,43 +495,88 @@ class GCodeParser:
 
         return result
 
-    def _points_fit_arc(self, points: list[Tuple[float, float]]) -> bool:
-        """Return True if all points lie within arc_tolerance of a common circle."""
-        if len(points) < 3:
-            return True
-        p0, pm, pn = points[0], points[len(points) // 2], points[-1]
-        center, radius = _circumcircle(p0, pm, pn)
-        if center is None or radius is None or radius > 10_000:
-            return False
-        cx, cy = center
-        for p in points:
-            if abs(math.hypot(p[0] - cx, p[1] - cy) - radius) > self.arc_tolerance:
-                return False
-        return True
-
-    def _make_arc_command(
+    def _fit_arc(
         self,
-        start: Tuple[float, float],
-        end: Tuple[float, float],
         points: list[Tuple[float, float]],
-    ) -> str:
-        """Emit a G2 or G3 command from start to end using I/J offsets to the arc center."""
-        pm = points[len(points) // 2]
-        center, _ = _circumcircle(start, pm, end)
-        assert center is not None
-        I = center[0] - start[0]
-        J = center[1] - start[1]
+        lo: int,
+        hi: int,
+    ) -> Optional[Tuple[str, Tuple[float, float]]]:
+        """
+        Try to fit a single G2/G3 arc through points[lo:hi] in path order.
 
-        # Shoelace signed area: positive → CCW (G3), negative → CW (G2)
-        area = 0.0
-        n = len(points)
-        for k in range(n):
-            x1, y1 = points[k]
-            x2, y2 = points[(k + 1) % n]
-            area += x1 * y2 - x2 * y1
+        Returns (command, center) if the points lie within arc_tolerance of a
+        common circle AND sweep around it monotonically (a genuine arc, not an
+        S-curve, corner, or near-collinear wobble). Returns None otherwise.
 
-        cmd = "G3" if area > 0 else "G2"
-        return f"{cmd} X{end[0]:.4f} Y{end[1]:.4f} I{I:.4f} J{J:.4f} F{self.feed_rate_draw}\n"
+        Operates on index bounds rather than a sliced copy to avoid per-probe
+        allocation in the exponential/binary search above.
+        """
+        length = hi - lo
+        if length < 3:
+            return None
+
+        p0 = points[lo]
+        pm = points[lo + length // 2]
+        pn = points[hi - 1]
+        center, radius = _circumcircle(p0, pm, pn)
+        if center is None or radius is None:
+            return None
+        # Reject near-straight runs (huge radius) — keep them as G1 lines.
+        if radius < 1e-6 or radius > self.max_arc_radius:
+            return None
+
+        cx, cy = center
+        tol = self.arc_tolerance
+
+        # Every point must lie within tolerance of the circle.
+        for k in range(lo, hi):
+            px, py = points[k]
+            if abs(math.hypot(px - cx, py - cy) - radius) > tol:
+                return None
+
+        # The points must progress monotonically around the circle. This is what
+        # distinguishes a real arc from points that merely sit near a circle.
+        direction = 0  # +1 = CCW (G3), -1 = CW (G2)
+        total_sweep = 0.0
+        prev_angle = math.atan2(points[lo][1] - cy, points[lo][0] - cx)
+
+        for k in range(lo + 1, hi):
+            px, py = points[k]
+            angle = math.atan2(py - cy, px - cx)
+            delta = angle - prev_angle
+            # Normalize step into (-pi, pi]
+            while delta <= -math.pi:
+                delta += 2 * math.pi
+            while delta > math.pi:
+                delta -= 2 * math.pi
+
+            if abs(delta) < 1e-9:
+                prev_angle = angle
+                continue
+
+            # A single step jumping more than a quarter turn means the points
+            # are too sparse to be a smooth arc — bail out.
+            if abs(delta) > math.pi / 2:
+                return None
+
+            step_dir = 1 if delta > 0 else -1
+            if direction == 0:
+                direction = step_dir
+            elif step_dir != direction:
+                # Sweep reversed direction → not a single arc.
+                return None
+
+            total_sweep += delta
+            prev_angle = angle
+
+        if direction == 0:
+            return None
+        # Don't fold a full (or over-full) circle into one arc.
+        if abs(total_sweep) >= 2 * math.pi:
+            return None
+
+        cmd = "G3" if direction > 0 else "G2"
+        return cmd, center
 
 
 def main():

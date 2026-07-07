@@ -21,6 +21,7 @@ from .utils import (
 )
 from .gcode_parser import GCodeParser
 from .surface_calibration import (
+    SHAPES,
     HeightMap,
     apply_height_map_if_configured,
     apply_height_map_to_gcode_text,
@@ -949,7 +950,12 @@ def surface_cal_grid(
         help="Output .gcode file or directory (default: cwd)",
     ),
     spacing: float = typer.Option(30.0, "--spacing", help="Grid spacing (mm)"),
-    cross_size: float = typer.Option(4.0, "--cross-size", help="X mark size (mm)"),
+    cross_size: float = typer.Option(4.0, "--cross-size", help="Mark size (mm)"),
+    shape: str = typer.Option(
+        "cross",
+        "--shape",
+        help="Mark shape: cross, plus, circle, square, swirl",
+    ),
     height_map: Optional[str] = typer.Option(
         None,
         "--height-map",
@@ -961,7 +967,17 @@ def surface_cal_grid(
         help="Use height_map_path from settings with generated grid (after --height-map if both set, height-map wins).",
     ),
 ):
-    """Emit G-code with an X at each grid point over the machine bed."""
+    """Emit G-code with a mark at each grid point over the machine bed."""
+    shape = shape.strip().lower()
+    if shape not in SHAPES:
+        console.print(
+            Panel(
+                f"[red]Unknown shape:[/red] {shape}\n"
+                f"Choose from: {', '.join(SHAPES)}",
+                style="bold red",
+            )
+        )
+        raise typer.Exit(code=1)
     settings = load_settings()
     g = settings["general"]
     aw, ah = g["area_width"], g["area_height"]
@@ -975,6 +991,7 @@ def surface_cal_grid(
         ah,
         grid_spacing_mm=spacing,
         cross_size_mm=cross_size,
+        shape=shape,
         z_up=z_up,
         z_down=z_down,
         feed_rate_draw=fd,

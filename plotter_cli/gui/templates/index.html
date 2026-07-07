@@ -528,15 +528,25 @@
             <!-- Tab: Generate Grid -->
             <div class="cal-tab-content active" id="cal-tab-grid">
               <p style="font-size: 13px; color: var(--muted-foreground); margin: 0 0 1rem 0;">
-                Generate G-code that draws an X at each grid point on the bed. Run this first, then use "Sample Map" to record adjustments.
+                Generate G-code that draws a mark at each grid point on the bed. Run this first, then use "Sample Map" to record adjustments.
               </p>
               <div class="form-group">
                 <label>Grid Spacing (mm)</label>
-                <input type="number" id="cal-grid-spacing" class="input-number" value="30" step="1" min="5" style="width: 100%;">
+                <input type="number" id="cal-grid-spacing" class="input-number" value="60" step="1" min="5" style="width: 100%;">
               </div>
               <div class="form-group">
-                <label>Cross Size (mm)</label>
-                <input type="number" id="cal-grid-cross-size" class="input-number" value="4" step="0.5" min="1" style="width: 100%;">
+                <label>Mark Shape</label>
+                <select id="cal-grid-shape" class="input-number" style="width: 100%;">
+                  <option value="cross">Cross (X)</option>
+                  <option value="plus">Plus (+)</option>
+                  <option value="circle">Circle</option>
+                  <option value="square">Square</option>
+                  <option value="swirl">Swirl</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label>Mark Size (mm)</label>
+                <input type="number" id="cal-grid-cross-size" class="input-number" value="20" step="0.5" min="1" style="width: 100%;">
               </div>
               <div id="cal-grid-info" style="font-size: 12px; color: var(--muted-foreground); margin: 0.75rem 0; padding: 0.5rem 0.75rem; background: var(--card); border-radius: 6px; border: 1px solid var(--border);">
                 —
@@ -564,7 +574,7 @@
               <div style="display: flex; gap: 1rem; flex-wrap: wrap; margin-bottom: 1rem;">
                 <div class="form-group" style="flex: 1; min-width: 100px;">
                   <label>Spacing (mm)</label>
-                  <input type="number" id="cal-sample-spacing" class="input-number" value="30" step="1" min="5" style="width: 100%;">
+                  <input type="number" id="cal-sample-spacing" class="input-number" value="60" step="1" min="5" style="width: 100%;">
                 </div>
                 <div class="form-group" style="flex: 1; min-width: 100px;">
                   <label>Delta Z (mm/step)</label>
