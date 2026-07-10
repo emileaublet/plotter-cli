@@ -165,6 +165,9 @@ class PlotterStudio {
     this.undoStack = [];
     this.redoStack = [];
 
+    // One-shot archive opt-out for the next export (resets after every export)
+    this.archiveNextExport = true;
+
     this.init();
   }
 
@@ -613,6 +616,10 @@ class PlotterStudio {
     document.getElementById('clear-all-btn')?.addEventListener('click', () => this.clearAll());
 
     // Export
+    document.getElementById('archive-toggle-btn')?.addEventListener('click', () => {
+      this.archiveNextExport = !this.archiveNextExport;
+      this.updateArchiveToggleUI();
+    });
     document.getElementById('export-btn')?.addEventListener('click', () => this.export());
 
     // Add paper modal
@@ -2093,6 +2100,26 @@ class PlotterStudio {
     return papersOutside;
   }
 
+  updateArchiveToggleUI() {
+    const btn = document.getElementById('archive-toggle-btn');
+    const icon = document.getElementById('archive-toggle-icon');
+    const text = document.getElementById('archive-toggle-text');
+    if (!btn || !icon || !text) return;
+
+    if (this.archiveNextExport) {
+      btn.classList.remove('btn-warning');
+      btn.classList.add('btn-secondary');
+      icon.setAttribute('data-lucide', 'save');
+      text.textContent = 'ARCHIVING';
+    } else {
+      btn.classList.remove('btn-secondary');
+      btn.classList.add('btn-warning');
+      icon.setAttribute('data-lucide', 'save-off');
+      text.textContent = 'NOT ARCHIVING';
+    }
+    lucide.createIcons({ nodes: [icon] });
+  }
+
   async export() {
     if (this.papers.length === 0) {
       await showAlert('No Papers', 'No papers to export', 'warning');
@@ -2179,7 +2206,7 @@ class PlotterStudio {
       const response = await fetch('/api/export', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ output_folder: outputFolder || null }),
+        body: JSON.stringify({ output_folder: outputFolder || null, archive: this.archiveNextExport }),
         signal: abortController.signal,
       });
 
@@ -2233,6 +2260,8 @@ class PlotterStudio {
       exportText.textContent = 'Export';
       exportSpinner.style.display = 'none';
       this.exportAbortController = null;
+      this.archiveNextExport = true;
+      this.updateArchiveToggleUI();
     }
   }
 
@@ -2748,4 +2777,5 @@ document.addEventListener('DOMContentLoaded', () => {
   if (window.lucide) {
     lucide.createIcons();
   }
+  app.updateArchiveToggleUI();
 });

@@ -1094,10 +1094,16 @@ def bulk_update_papers():
     return jsonify({"success": True, "papers": list(paper_store.values())})
 
 
-def _validate_export_papers():
-    """Build export list from papers with assigned SVGs. Returns list of export entries or raises."""
+def _validate_export_papers(paper_ids=None):
+    """Build export list from papers with assigned SVGs. Returns list of export entries or raises.
+
+    If paper_ids is given, only papers whose id is in that list are included;
+    unknown ids are silently ignored. If None, every assigned paper is included.
+    """
     export_svgs = []
     for paper in paper_store.values():
+        if paper_ids is not None and paper.get("id") not in paper_ids:
+            continue
         svg_id = paper.get("svg_id")
         if not svg_id:
             continue
@@ -1162,7 +1168,7 @@ def _run_export_pipeline(export_svgs, output_folder, settings, emit=None):
     }
 
 
-def _build_export_response(output_folder, pipeline_result):
+def _build_export_response(output_folder, pipeline_result, archive=True):
     """Build the JSON response dict for a successful export."""
     return {
         "success": True,
@@ -1171,6 +1177,7 @@ def _build_export_response(output_folder, pipeline_result):
         "gcode_files": pipeline_result["gcode_files"],
         "guide_gcode": pipeline_result["guide_gcode"],
         "stats": pipeline_result["stats"],
+        "archive": archive,
     }
 
 
@@ -1186,6 +1193,8 @@ def export():
     """
     data = request.json
     output_folder = data.get("output_folder") or tempfile.mkdtemp(prefix="plotter_export_")
+    archive = bool(data.get("archive", True))
+    paper_ids = data.get("paper_ids")
 
     print(f"\n{'='*60}")
     print(f"EXPORT: Output folder: {output_folder}")
@@ -1203,7 +1212,7 @@ def export():
         )
 
         try:
-            export_svgs = _validate_export_papers()
+            export_svgs = _validate_export_papers(paper_ids)
             if not export_svgs:
                 events.put({"type": "error", "error": "No assigned SVGs to export"})
                 return
@@ -1256,7 +1265,7 @@ def export():
             print(f"{'='*60}\n")
 
             events.put(
-                {"type": "done", **_build_export_response(output_folder, pipeline_result)}
+                {"type": "done", **_build_export_response(output_folder, pipeline_result, archive)}
             )
         except Exception as e:
             events.put({"type": "error", "error": str(e)})
