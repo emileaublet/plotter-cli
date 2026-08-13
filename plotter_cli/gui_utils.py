@@ -283,12 +283,14 @@ def generate_combined_svg(
                 wrapper_svg.set(
                     "viewBox", f"0 0 {original_width:.6f} {original_height:.6f}"
                 )
-            # vpype resolves nested percentage viewports against the outer canvas,
-            # unlike browser rendering. Use explicit local viewport dimensions.
-            if wrapper_svg.get("width") == "100%":
-                wrapper_svg.set("width", f"{original_width:.6f}")
-            if wrapper_svg.get("height") == "100%":
-                wrapper_svg.set("height", f"{original_height:.6f}")
+            # The enclosing group already converts viewBox units -> mm via
+            # unit_scale, so the wrapper's viewport must map 1:1 onto its viewBox.
+            # Any other width/height (percentages, or absolute units such as
+            # width="30in", which SVG resolves as 30*96=2880 user units) makes the
+            # nested viewport re-scale the artwork by viewport/viewBox on top of
+            # our transform, pushing it off the bed.
+            wrapper_svg.set("width", f"{original_width:.6f}")
+            wrapper_svg.set("height", f"{original_height:.6f}")
 
             # Copy children from original SVG root (preserve attributes/transforms)
             for child in svg_root:
