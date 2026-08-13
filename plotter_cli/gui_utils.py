@@ -16,7 +16,11 @@ from .utils import (
     rename_gcode_with_color_name,
 )
 from .gcode_parser import GCodeParser
-from .surface_calibration import apply_height_map_if_configured
+from .surface_calibration import (
+    HeightMap,
+    apply_height_map_if_configured,
+    resolve_height_map_path,
+)
 
 
 def _friendly_gcode_label(path: str) -> str:
@@ -309,7 +313,12 @@ def generate_combined_svg(
     tree.write(output_path, encoding="utf-8", xml_declaration=True)
 
 
-def generate_guide_gcode(svgs: List[Dict], output_path: str, settings: Dict):
+def generate_guide_gcode(
+    svgs: List[Dict],
+    output_path: str,
+    settings: Dict,
+    height_map_path: Optional[str] = None,
+):
     """
     Generate guide G-code with rectangles for each paper, accounting for transforms.
 
@@ -317,6 +326,9 @@ def generate_guide_gcode(svgs: List[Dict], output_path: str, settings: Dict):
         svgs: List of SVG data dictionaries with transforms
         output_path: Path to save the guide G-code
         settings: Settings dictionary from load_settings()
+        height_map_path: Optional bed height map override. When a map is active the
+            rectangle edges are subdivided so Z compensation can follow the bed
+            along each edge rather than only at the corners.
     """
     import math
 
@@ -325,6 +337,16 @@ def generate_guide_gcode(svgs: List[Dict], output_path: str, settings: Dict):
     feed_rate_draw = settings["general"].get("feed_rate_draw", 3000)
     feed_rate_travel = settings["general"].get("feed_rate_travel", 6000)
     feed_rate_z = settings["general"].get("feed_rate_z", 1500)
+
+    # When a bed height map is active, corner-to-corner moves are far too long for
+    # Z compensation to track the bed (it only adjusts Z at explicit move points).
+    # Subdivide edges to half the sample spacing so each edge follows the surface.
+    edge_step = 0.0
+    if resolve_height_map_path(settings["general"], height_map_path):
+        hmap = HeightMap.from_json_file(
+            resolve_height_map_path(settings["general"], height_map_path)
+        )
+        edge_step = hmap.spacing / 2 if hmap.spacing > 0 else 10.0
 
     gcode_lines = [
         "G21 ; Set units to mm",
@@ -390,16 +412,25 @@ def generate_guide_gcode(svgs: List[Dict], output_path: str, settings: Dict):
         )
         gcode_lines.append(f"G1 Z{z_down} F{feed_rate_z} ; Pen down")
 
-        # Draw to each corner (close the rectangle)
-        for i in range(1, 4):
-            gcode_lines.append(
-                f"G1 X{corners_world[i][0]:.2f} Y{corners_world[i][1]:.2f} F{feed_rate_draw} ; Corner {i+1}"
-            )
+        # Draw to each corner, closing the rectangle. The comment must contain
+        # "Draw" for the height-map pass to recognise these as pen-down moves.
+        for i in range(1, 5):
+            start = corners_world[i - 1]
+            end = corners_world[i % 4]
+            label = "Close rectangle" if i == 4 else f"Corner {i+1}"
 
-        # Close rectangle
-        gcode_lines.append(
-            f"G1 X{corners_world[0][0]:.2f} Y{corners_world[0][1]:.2f} F{feed_rate_draw} ; Close rectangle"
-        )
+            steps = 1
+            if edge_step > 0:
+                length = math.hypot(end[0] - start[0], end[1] - start[1])
+                steps = max(1, math.ceil(length / edge_step))
+
+            for s in range(1, steps + 1):
+                t = s / steps
+                px = start[0] + (end[0] - start[0]) * t
+                py = start[1] + (end[1] - start[1]) * t
+                gcode_lines.append(
+                    f"G1 X{px:.2f} Y{py:.2f} F{feed_rate_draw} ; Draw {label}"
+                )
         gcode_lines.append(f"G1 Z{z_up} F{feed_rate_z} ; Pen up")
         gcode_lines.append("")
 

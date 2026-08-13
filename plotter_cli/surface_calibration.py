@@ -101,6 +101,15 @@ class HeightMap:
         self.nx = len(self.x_coords)
         self.ny = len(self.y_coords)
 
+    @property
+    def spacing(self) -> float:
+        """Grid spacing in mm (samples are evenly spaced), or 0.0 if unknown."""
+        if self.nx > 1:
+            return abs(self.x_coords[1] - self.x_coords[0])
+        if self.ny > 1:
+            return abs(self.y_coords[1] - self.y_coords[0])
+        return 0.0
+
     @classmethod
     def from_json_dict(cls, data: Dict[str, Any]) -> "HeightMap":
         spacing = float(data["grid_spacing"])
@@ -395,12 +404,17 @@ def apply_height_map_to_gcode_file(
         encoding="utf-8",
     )
 
-def apply_height_map_if_configured(
-    gcode_paths: List[str],
+def resolve_height_map_path(
     settings_general: Dict[str, Any],
     height_map_path_override: Optional[str] = None,
-) -> None:
-    """Apply bed height map to generated G-code files when a path is configured."""
+) -> Optional[str]:
+    """
+    Resolve which bed height map (if any) is active.
+
+    Order: explicit override -> settings' height_map_path -> a height_map.json
+    sitting next to the settings file. Returns an absolute path, or None when no
+    map is configured. Raises if a configured path does not exist.
+    """
     import os
 
     effective = height_map_path_override
@@ -413,14 +427,24 @@ def apply_height_map_if_configured(
         if default_path.is_file():
             effective = str(default_path)
     if not effective:
-        return
+        return None
     effective = os.path.abspath(os.path.expanduser(str(effective).strip()))
     if not os.path.isfile(effective):
         raise FileNotFoundError(f"Height map file not found: {effective}")
+    return effective
+
+
+def apply_height_map_if_configured(
+    gcode_paths: List[str],
+    settings_general: Dict[str, Any],
+    height_map_path_override: Optional[str] = None,
+) -> None:
+    """Apply bed height map to generated G-code files when a path is configured."""
+    effective = resolve_height_map_path(settings_general, height_map_path_override)
+    if not effective:
+        return
     hmap = HeightMap.from_json_file(effective)
     z_down_val = float(settings_general.get("z_down", 0.0))
     for gcode_file in gcode_paths:
-        if os.path.basename(gcode_file).lower() == "guide.gcode":
-            continue
         apply_height_map_to_gcode_file(gcode_file, hmap, z_down_base=z_down_val)
 

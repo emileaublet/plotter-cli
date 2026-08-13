@@ -58,6 +58,7 @@ from .gui_utils import (
 from .surface_calibration import (
     SHAPES,
     generate_calibration_grid_gcode,
+    apply_height_map_if_configured,
     apply_height_map_to_gcode_text,
     grid_dimensions,
     build_height_map_dict,
@@ -1155,6 +1156,7 @@ def _run_export_pipeline(export_svgs, output_folder, settings, emit=None):
     emit(4, TOTAL, "Generating guide G-code")
     guide_gcode_path = os.path.join(output_folder, "guide.gcode")
     generate_guide_gcode(list(paper_store.values()), guide_gcode_path, settings)
+    apply_height_map_if_configured([guide_gcode_path], settings["general"])
 
     emit(5, TOTAL, "Writing stats.txt")
     stats_path = os.path.join(output_folder, "stats.txt")
