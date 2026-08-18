@@ -26,6 +26,7 @@ import subprocess
 import tempfile
 import threading
 import uuid
+import hashlib
 from pathlib import Path
 from flask import (
     Flask,
@@ -48,6 +49,11 @@ from .utils import (
     estimate_draw_time,
     format_time,
     format_distance,
+    extract_svg_stroke_colors,
+    hex_to_color_name,
+    _normalise_svg_stroke,
+    build_color_replacements,
+    rewrite_svg_stroke_colors,
 )
 from .gui_utils import (
     svg_to_png,
@@ -83,6 +89,119 @@ app.config["MAX_CONTENT_LENGTH"] = (
 # In-memory storage (in production, use a database)
 svg_library = {}  # Available SVGs that can be assigned to papers
 paper_store = {}  # Papers on the canvas
+color_simplification = {
+    "amount": 0.0,
+    "forced_colors": [],
+}
+simplified_preview_cache = {}
+
+
+def _canvas_color_records():
+    """Return unique stroke colours used by every assigned paper."""
+    records = {}
+    for paper in paper_store.values():
+        svg_id = paper.get("svg_id")
+        svg_data = svg_library.get(svg_id) if svg_id else None
+        if not svg_data:
+            continue
+        filename = svg_data.get("filename", "Sketch")
+        for raw_color in svg_data.get("colors", []):
+            color = _normalise_svg_stroke(raw_color)
+            if not color:
+                continue
+            if color not in records:
+                records[color] = {
+                    "hex": color,
+                    "name": hex_to_color_name(color),
+                    "sketches": set(),
+                }
+            records[color]["sketches"].add(filename)
+    return list(records.values())
+
+
+def _active_color_replacements():
+    colors = [record["hex"] for record in _canvas_color_records()]
+    return build_color_replacements(
+        colors,
+        amount=color_simplification.get("amount", 0.0),
+        forced_colors=color_simplification.get("forced_colors", []),
+    )
+
+
+def _color_simplification_payload():
+    records = _canvas_color_records()
+    replacements = _active_color_replacements()
+    forced = set(color_simplification.get("forced_colors", []))
+    colors = []
+    for record in records:
+        color = record["hex"]
+        replacement = replacements.get(color, color)
+        colors.append(
+            {
+                "hex": color,
+                "name": record["name"],
+                "replacement": replacement,
+                "replacement_name": hex_to_color_name(replacement),
+                "forced": color in forced,
+                "merged": replacement != color,
+                "sketches": sorted(record["sketches"]),
+            }
+        )
+    return {
+        "amount": color_simplification.get("amount", 0.0),
+        "forced_colors": list(color_simplification.get("forced_colors", [])),
+        "replacement_map": replacements,
+        "colors": colors,
+        "preview_version": color_simplification.get("preview_version", 0),
+    }
+
+
+def _set_color_simplification_state(data):
+    amount = data.get("amount", 0.0)
+    try:
+        amount = max(0.0, min(1.0, float(amount)))
+    except (TypeError, ValueError):
+        amount = 0.0
+
+    available = {record["hex"] for record in _canvas_color_records()}
+    forced_colors = []
+    for raw_color in data.get("forced_colors", []):
+        color = _normalise_svg_stroke(raw_color)
+        if color in available and color not in forced_colors:
+            forced_colors.append(color)
+
+    color_simplification["amount"] = amount
+    color_simplification["forced_colors"] = forced_colors
+    color_simplification["preview_version"] = color_simplification.get("preview_version", 0) + 1
+    return _color_simplification_payload()
+
+
+def _simplified_preview_paths(svg_data, replacements):
+    """Return cached transformed SVG/PNG paths for an SVG preview."""
+    changed = {source: target for source, target in replacements.items() if source != target}
+    if not changed:
+        return svg_data.get("filepath"), svg_data.get("preview_png_path")
+
+    signature = tuple(sorted(changed.items()))
+    cache_key = (svg_data["id"], signature)
+    cached = simplified_preview_cache.get(cache_key)
+    if cached and os.path.exists(cached[0]) and (cached[1] is None or os.path.exists(cached[1])):
+        return cached
+
+    signature_text = repr(signature).encode("utf-8")
+    digest = hashlib.sha1(signature_text).hexdigest()[:12]
+    base_path = os.path.join(tempfile.gettempdir(), f"{svg_data['id']}_simplified_{digest}")
+    simplified_svg_path = f"{base_path}.svg"
+    simplified_png_path = f"{base_path}.png"
+    try:
+        rewrite_svg_stroke_colors(svg_data["filepath"], simplified_svg_path, changed)
+        generated_png = svg_to_png(simplified_svg_path, simplified_png_path)
+        cached = (simplified_svg_path, generated_png)
+        simplified_preview_cache[cache_key] = cached
+        return cached
+    except Exception as error:
+        print(f"Warning: Failed to generate simplified SVG preview: {error}")
+        return simplified_svg_path, None
 
 
 def _default_height_map_path():
@@ -327,6 +446,7 @@ def add_svg():
         initial_scale = 1.0
 
         # Store SVG metadata
+        stroke_colors = extract_svg_stroke_colors(filepath)
         svg_library[svg_id] = {
             "id": svg_id,
             "filename": filename,
@@ -340,6 +460,7 @@ def add_svg():
             "svg_scale": initial_scale,  # Scale factor to fit SVG inside paper (auto-calculated)
             "x": 0,
             "y": 0,
+            "colors": stroke_colors,
         }
 
         return jsonify(
@@ -353,6 +474,10 @@ def add_svg():
                 "paper_name": None,
                 "svg_scale": 1.0,
                 "preview_url": f"/api/svg-preview/{svg_id}",
+                "colors": [
+                    {"hex": color, "name": hex_to_color_name(color)}
+                    for color in stroke_colors
+                ],
             }
         )
 
@@ -372,17 +497,26 @@ def get_svg_preview(svg_id):
 
     try:
         svg_data = svg_library[svg_id]
-        filepath = svg_data["filepath"]
+        preview_svg_path, preview_png_path = _simplified_preview_paths(
+            svg_data, _active_color_replacements()
+        )
 
-        # Use cached PNG path; regenerate only if missing from disk
-        png_path = svg_data.get("preview_png_path")
+        # Use cached PNG path; regenerate only if missing from disk.
+        filepath = preview_svg_path
+        png_path = preview_png_path
         if png_path and os.path.exists(png_path):
             return send_file(png_path, mimetype="image/png")
+
+        # A simplified preview may have a transformed SVG but no PNG when the
+        # optional rasterizer is unavailable. Serve that transformed SVG.
+        if preview_svg_path != svg_data["filepath"] and os.path.exists(preview_svg_path):
+            return send_file(preview_svg_path, mimetype="image/svg+xml")
 
         # Cache miss: regenerate and store
         try:
             png_path = svg_to_png(filepath)
-            svg_data["preview_png_path"] = png_path
+            if filepath == svg_data["filepath"]:
+                svg_data["preview_png_path"] = png_path
         except Exception as e:
             print(f"Warning: Failed to regenerate PNG preview for {filepath}: {e}")
             png_path = None
@@ -398,6 +532,22 @@ def get_svg_preview(svg_id):
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/color-simplification", methods=["GET"])
+def get_color_simplification():
+    """Return the current canvas-wide colour simplification state."""
+    return jsonify(_color_simplification_payload())
+
+
+@app.route("/api/color-simplification/preview", methods=["POST"])
+def preview_color_simplification():
+    """Stage colour simplification and regenerate previews on the next fetch."""
+    try:
+        payload = _set_color_simplification_state(request.get_json() or {})
+        return jsonify(payload)
+    except Exception as error:
+        return jsonify({"error": str(error)}), 400
 
 
 @app.route("/api/add-paper", methods=["POST"])
@@ -560,6 +710,10 @@ def list_svgs():
                 "width": svg_data["width"],
                 "height": svg_data["height"],
                 "preview_url": f"/api/svg-preview/{svg_id}",
+                "colors": [
+                    {"hex": color, "name": hex_to_color_name(color)}
+                    for color in svg_data.get("colors", [])
+                ],
             }
         )
     return jsonify(svgs)
@@ -593,6 +747,10 @@ def list_papers():
                     "width": svg_data["width"],
                     "height": svg_data["height"],
                     "preview_url": f"/api/svg-preview/{svg_id}",
+                    "colors": [
+                        {"hex": color, "name": hex_to_color_name(color)}
+                        for color in svg_data.get("colors", [])
+                    ],
                 }
         papers.append(paper_info)
     return jsonify(papers)
@@ -707,6 +865,10 @@ def clear_all():
     # Clear all data
     paper_store.clear()
     svg_library.clear()
+    color_simplification["amount"] = 0.0
+    color_simplification["forced_colors"] = []
+    color_simplification["preview_version"] = color_simplification.get("preview_version", 0) + 1
+    simplified_preview_cache.clear()
     
     return jsonify({
         "success": True,
@@ -1124,6 +1286,39 @@ def _validate_export_papers(paper_ids=None):
     return export_svgs
 
 
+def _materialize_export_color_replacements(export_svgs):
+    """Create temporary SVG copies carrying the active colour replacements."""
+    replacements = {
+        source: target
+        for source, target in _active_color_replacements().items()
+        if source != target
+    }
+    if not replacements:
+        return export_svgs
+
+    materialized = []
+    for entry in export_svgs:
+        export_entry = dict(entry)
+        file_descriptor, transformed_path = tempfile.mkstemp(
+            prefix="plotter_export_simplified_", suffix=".svg"
+        )
+        os.close(file_descriptor)
+        try:
+            rewrite_svg_stroke_colors(entry["filepath"], transformed_path, replacements)
+            export_entry["filepath"] = transformed_path
+            export_entry["colors"] = [
+                replacements.get(color, color) for color in entry.get("colors", [])
+            ]
+            materialized.append(export_entry)
+        except Exception:
+            try:
+                os.remove(transformed_path)
+            except OSError:
+                pass
+            raise
+    return materialized
+
+
 def _run_export_pipeline(export_svgs, output_folder, settings, emit=None):
     """
     Run SVG combine + gcode pipeline. Returns dict with file paths.
@@ -1138,6 +1333,7 @@ def _run_export_pipeline(export_svgs, output_folder, settings, emit=None):
     TOTAL = 5
     canvas_width = settings["general"]["area_width"]
     canvas_height = settings["general"]["area_height"]
+    export_svgs = _materialize_export_color_replacements(export_svgs)
 
     emit(1, TOTAL, f"Combining {len(export_svgs)} SVG(s)")
     combined_svg_path = os.path.join(output_folder, "combined.svg")

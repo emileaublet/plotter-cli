@@ -263,6 +263,22 @@
               <p class="empty-state-hint">Select a paper to edit</p>
             </div>
           </div>
+          <section class="inspector-palette-section" aria-labelledby="inspector-palette-title">
+            <div class="inspector-palette-header">
+              <div class="inspector-palette-heading">
+                <i data-lucide="droplets" class="section-icon" style="width: 14px; height: 14px;"></i>
+                <span id="inspector-palette-title" class="section-title">Colours on all papers</span>
+              </div>
+              <div class="inspector-palette-actions">
+                <span id="inspector-palette-count" class="inspector-palette-count"></span>
+                <button id="simplify-colors-btn" class="btn btn-secondary inspector-simplify-btn" title="Simplify colours">
+                  <i data-lucide="wand-sparkles" style="width: 13px; height: 13px;"></i>
+                  Simplify
+                </button>
+              </div>
+            </div>
+            <div id="inspector-palette" class="inspector-palette" aria-live="polite"></div>
+          </section>
         </aside>
       </div>
 
@@ -468,6 +484,56 @@
           <div class="modal-footer" style="padding: 1rem 1.5rem; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: 0.5rem;">
             <button id="settings-cancel-btn" class="btn btn-secondary">Cancel</button>
             <button id="settings-save-btn" class="btn btn-primary">Save</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Colour Simplification Modal -->
+      <div id="simplify-colors-modal" class="modal">
+        <div class="modal-content simplify-colors-modal-content">
+          <div class="modal-header">
+            <h2>
+              <i data-lucide="wand-sparkles" style="width: 18px; height: 18px;"></i>
+              Simplify colours
+            </h2>
+            <button class="icon-btn" id="close-simplify-colors-btn" title="Close">
+              <i data-lucide="x" style="width: 16px; height: 16px;"></i>
+            </button>
+          </div>
+          <div class="modal-body simplify-colors-modal-body">
+            <p class="simplify-colors-description">
+              Move the slider to merge visually similar stroke colours. At 0%, every colour stays separate.
+            </p>
+            <div class="simplify-slider-row">
+              <label for="simplify-colors-slider">Merge strength</label>
+              <output id="simplify-colors-value" for="simplify-colors-slider">0%</output>
+            </div>
+            <input id="simplify-colors-slider" class="simplify-colors-slider" type="range" min="0" max="1" step="0.01" value="0" />
+            <div class="simplify-colors-preview-controls">
+              <div id="simplify-colors-status" class="simplify-colors-status" aria-live="polite">Preview matches the original colours.</div>
+              <button id="simplify-colors-refresh-btn" class="btn btn-secondary" title="Regenerate preview">
+                <i data-lucide="refresh-cw" style="width: 13px; height: 13px;"></i>
+                Preview
+              </button>
+            </div>
+            <div class="simplify-colors-list-header">
+              <span>Colour mapping</span>
+              <span>Keep separate</span>
+            </div>
+            <div id="simplify-colors-list" class="simplify-colors-list" aria-live="polite"></div>
+          </div>
+          <div class="modal-footer simplify-colors-footer">
+            <div class="simplify-colors-footer-left">
+              <button id="simplify-colors-undo-btn" class="btn btn-secondary" disabled>
+                <i data-lucide="undo-2" style="width: 14px; height: 14px;"></i>
+                Undo
+              </button>
+              <button id="simplify-colors-reset-btn" class="btn btn-secondary">Reset</button>
+            </div>
+            <div class="simplify-colors-footer-right">
+              <button id="simplify-colors-cancel-btn" class="btn btn-secondary">Cancel</button>
+              <button id="simplify-colors-apply-btn" class="btn btn-primary">Apply</button>
+            </div>
           </div>
         </div>
       </div>

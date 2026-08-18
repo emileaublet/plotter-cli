@@ -6,6 +6,280 @@ import re
 import os
 
 
+_SVG_DRAWABLE_TAGS = {
+    "path",
+    "line",
+    "polyline",
+    "polygon",
+    "rect",
+    "circle",
+    "ellipse",
+    "text",
+    "use",
+}
+
+
+def _normalise_svg_stroke(value):
+    """Return a CSS colour as a stable hex value, or ``None`` for no paint."""
+    if not value:
+        return None
+
+    value = str(value).strip().lower()
+    if value in {"none", "transparent", "inherit", "currentcolor"} or value.startswith("url("):
+        return None
+
+    if value.startswith("#"):
+        raw = value[1:]
+        if len(raw) in {3, 4}:
+            raw = "".join(char * 2 for char in raw)
+        if len(raw) in {6, 8} and all(char in "0123456789abcdef" for char in raw):
+            if len(raw) == 8 and raw[6:] == "ff":
+                raw = raw[:6]
+            if len(raw) == 8 and raw[6:] == "00":
+                return None
+            return f"#{raw}"
+        return None
+
+    rgb_match = re.fullmatch(
+        r"rgba?\(\s*([0-9.]+%?)\s*[, ]\s*([0-9.]+%?)\s*[, ]\s*([0-9.]+%?)(?:\s*[,/]\s*([0-9.]+%?))?\s*\)",
+        value,
+    )
+    if rgb_match:
+        channels = []
+        for raw_channel in rgb_match.group(1, 2, 3):
+            if raw_channel.endswith("%"):
+                channel = round(float(raw_channel[:-1]) * 2.55)
+            else:
+                channel = round(float(raw_channel))
+            channels.append(max(0, min(255, channel)))
+
+        alpha = rgb_match.group(4)
+        if alpha is None:
+            return "#{:02x}{:02x}{:02x}".format(*channels)
+        alpha_value = float(alpha[:-1]) / 100 if alpha.endswith("%") else float(alpha)
+        alpha_byte = max(0, min(255, round(alpha_value * 255)))
+        if alpha_byte == 0:
+            return None
+        if alpha_byte == 255:
+            return "#{:02x}{:02x}{:02x}".format(*channels)
+        return "#{:02x}{:02x}{:02x}{:02x}".format(*channels, alpha_byte)
+
+    # Pillow is already a project dependency for SVG previews and provides a
+    # complete CSS named-colour parser. Keep this optional so colour metadata
+    # never prevents an SVG from being uploaded if that dependency is absent.
+    try:
+        from PIL import ImageColor
+
+        rgb = ImageColor.getrgb(value)
+        return "#{:02x}{:02x}{:02x}".format(*rgb[:3])
+    except (ImportError, ValueError, TypeError):
+        return None
+
+
+def extract_svg_stroke_colors(svg_file):
+    """Extract unique, effective stroke colours from an SVG in document order.
+
+    Stroke values can be declared directly, in a ``style`` attribute, or on a
+    parent group. The result is intentionally limited to strokes because those
+    are the colour layers used by the plotter's vpype pipeline; fills are not
+    plotted as separate pen colours.
+    """
+    try:
+        tree = ET.parse(svg_file)
+    except (ET.ParseError, OSError):
+        return []
+
+    colours = []
+    seen = set()
+
+    def parse_declarations(style):
+        declarations = {}
+        for declaration in style.split(";"):
+            if ":" not in declaration:
+                continue
+            property_name, property_value = declaration.split(":", 1)
+            declarations[property_name.strip().lower()] = property_value.strip()
+        return declarations
+
+    css_rules = {}
+    for style_element in tree.getroot().iter():
+        if style_element.tag.rsplit("}", 1)[-1].lower() != "style":
+            continue
+        css_text = "".join(style_element.itertext())
+        for selectors, declaration_text in re.findall(r"([^{}]+)\{([^{}]*)\}", css_text):
+            declarations = parse_declarations(declaration_text)
+            if "stroke" not in declarations:
+                continue
+            for selector in selectors.split(","):
+                css_rules[selector.strip()] = declarations
+
+    def visit(element, inherited_stroke=None):
+        stroke = inherited_stroke
+        tag = element.tag.rsplit("}", 1)[-1].lower()
+
+        matching_rules = []
+        element_id = element.attrib.get("id")
+        if element_id:
+            matching_rules.append(css_rules.get(f"#{element_id}"))
+        for class_name in element.attrib.get("class", "").split():
+            matching_rules.append(css_rules.get(f".{class_name}"))
+        matching_rules.append(css_rules.get(tag))
+        for declarations in matching_rules:
+            if declarations and "stroke" in declarations:
+                stroke = declarations["stroke"]
+
+        declarations = parse_declarations(element.attrib.get("style", ""))
+
+        if "stroke" in declarations:
+            stroke = declarations["stroke"]
+        if "stroke" in element.attrib:
+            stroke = element.attrib["stroke"]
+
+        if tag in _SVG_DRAWABLE_TAGS:
+            normalised = _normalise_svg_stroke(stroke)
+            if normalised and normalised not in seen:
+                seen.add(normalised)
+                colours.append(normalised)
+
+        for child in element:
+            visit(child, stroke)
+
+    visit(tree.getroot())
+    return colours
+
+
+def _hex_to_rgb(hex_color):
+    """Convert a normalized SVG colour to an RGB tuple."""
+    raw = hex_color.lstrip("#")
+    if len(raw) == 8:
+        raw = raw[:6]
+    if len(raw) != 6:
+        return None
+    try:
+        return tuple(int(raw[index : index + 2], 16) for index in (0, 2, 4))
+    except ValueError:
+        return None
+
+
+def _rgb_to_lab(rgb):
+    """Convert sRGB to CIE L*a*b* for perceptual distance comparisons."""
+    values = []
+    for channel in rgb:
+        value = channel / 255
+        values.append(value / 12.92 if value <= 0.04045 else ((value + 0.055) / 1.055) ** 2.4)
+
+    red, green, blue = values
+    x = (red * 0.4124 + green * 0.3576 + blue * 0.1805) / 0.95047
+    y = (red * 0.2126 + green * 0.7152 + blue * 0.0722) / 1.00000
+    z = (red * 0.0193 + green * 0.1192 + blue * 0.9505) / 1.08883
+
+    def pivot(value):
+        return value ** (1 / 3) if value > 0.008856 else (7.787 * value) + (16 / 116)
+
+    x, y, z = pivot(x), pivot(y), pivot(z)
+    return (116 * y) - 16, 500 * (x - y), 200 * (y - z)
+
+
+def color_distance(first, second):
+    """Return a CIE76-like distance between two normalized hex colours."""
+    first_rgb = _hex_to_rgb(first)
+    second_rgb = _hex_to_rgb(second)
+    if not first_rgb or not second_rgb:
+        return float("inf")
+    first_lab = _rgb_to_lab(first_rgb)
+    second_lab = _rgb_to_lab(second_rgb)
+    return sum((a - b) ** 2 for a, b in zip(first_lab, second_lab)) ** 0.5
+
+
+def build_color_replacements(colors, amount=0.0, forced_colors=None):
+    """Build a stable colour-to-colour map for canvas-wide simplification.
+
+    ``amount`` is a 0..1 control mapped to a perceptual colour-distance
+    threshold. Forced colours always map to themselves and are excluded from
+    every other colour's merge candidates.
+    """
+    unique_colors = []
+    for color in colors or []:
+        normalized = _normalise_svg_stroke(color)
+        if normalized and normalized not in unique_colors:
+            unique_colors.append(normalized)
+
+    try:
+        amount = max(0.0, min(1.0, float(amount)))
+    except (TypeError, ValueError):
+        amount = 0.0
+
+    forced = set()
+    for color in forced_colors or []:
+        normalized = _normalise_svg_stroke(color)
+        if normalized and normalized in unique_colors:
+            forced.add(normalized)
+
+    replacements = {color: color for color in unique_colors}
+    if amount <= 0 or len(unique_colors) < 2:
+        return replacements
+
+    # 100 Delta-E is deliberately strong but still keeps clearly different
+    # hues apart. Slider movement therefore remains perceptual rather than
+    # collapsing every colour into one arbitrary bucket at the end stop.
+    threshold = amount * 100.0
+    representatives = []
+
+    # Protected colours are their own groups and cannot absorb nearby colours.
+    for color in unique_colors:
+        if color in forced:
+            representatives.append(color)
+
+    for color in unique_colors:
+        if color in forced:
+            continue
+        best_representative = None
+        best_distance = float("inf")
+        for representative in representatives:
+            if representative in forced:
+                continue
+            distance = color_distance(color, representative)
+            if distance < best_distance:
+                best_distance = distance
+                best_representative = representative
+
+        if best_representative is not None and best_distance <= threshold:
+            replacements[color] = best_representative
+        else:
+            representatives.append(color)
+
+    return replacements
+
+
+def rewrite_svg_stroke_colors(svg_file, output_file, replacements):
+    """Write a copy of an SVG with stroke colours replaced."""
+    tree = ET.parse(svg_file)
+    root = tree.getroot()
+    replacements = replacements or {}
+
+    def replace_value(value):
+        normalized = _normalise_svg_stroke(value)
+        return replacements.get(normalized, value) if normalized else value
+
+    def replace_style(style):
+        def replace_declaration(match):
+            return f"{match.group(1)}{replace_value(match.group(2))}"
+
+        return re.sub(r"(\bstroke\s*:\s*)([^;}]*)", replace_declaration, style, flags=re.I)
+
+    for element in root.iter():
+        if "stroke" in element.attrib:
+            element.set("stroke", replace_value(element.attrib["stroke"]))
+        if "style" in element.attrib:
+            element.set("style", replace_style(element.attrib["style"]))
+        if element.tag.rsplit("}", 1)[-1].lower() == "style" and element.text:
+            element.text = replace_style(element.text)
+
+    ET.indent(tree, space="  ")
+    tree.write(output_file, encoding="utf-8", xml_declaration=True)
+    return output_file
+
+
 # Module-level settings cache — avoids repeated disk reads within a session.
 # Invalidated by save_settings() so changes are picked up immediately.
 _settings_cache = None

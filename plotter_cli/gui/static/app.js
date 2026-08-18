@@ -168,6 +168,20 @@ class PlotterStudio {
     // One-shot archive opt-out for the next export (resets after every export)
     this.archiveNextExport = true;
 
+    // Canvas-wide colour simplification state and modal draft history
+    this.colorSimplification = {
+      amount: 0,
+      forcedColors: [],
+      replacementMap: {},
+      colors: [],
+    };
+    this.colorSimplificationVersion = 0;
+    this.simplificationDraft = null;
+    this.simplificationInitialState = null;
+    this.simplificationHistory = [];
+    this.simplificationLastPreviewState = null;
+    this.simplificationPreviewTimer = null;
+
     this.init();
   }
 
@@ -184,6 +198,7 @@ class PlotterStudio {
   refresh({ paperList = true, inspector = true, render = true } = {}) {
     if (paperList) this.updatePaperList();
     this.updateAutoAssignVisibility();
+    this.updateCanvasPalette();
     if (inspector) this.updateInspector();
     if (render) this.render();
   }
@@ -240,8 +255,11 @@ class PlotterStudio {
     this.setupCanvas();
     this.setupEventListeners();
     this.setupCalibration();
+    await this.loadColorSimplificationState();
     await Promise.all([this.loadSvgLibrary(), this.loadPapers()]);
+    await this.loadColorSimplificationState();
     this.render();
+    this.updateCanvasPalette();
     this.updateInspector();
   }
 
@@ -681,6 +699,50 @@ class PlotterStudio {
       }
     });
 
+    // Colour simplification modal
+    document.getElementById('simplify-colors-btn')?.addEventListener('click', () => {
+      this.openColorSimplificationModal();
+    });
+    document.getElementById('close-simplify-colors-btn')?.addEventListener('click', () => {
+      this.cancelColorSimplification();
+    });
+    document.getElementById('simplify-colors-cancel-btn')?.addEventListener('click', () => {
+      this.cancelColorSimplification();
+    });
+    document.getElementById('simplify-colors-apply-btn')?.addEventListener('click', () => {
+      this.applyColorSimplification();
+    });
+    document.getElementById('simplify-colors-undo-btn')?.addEventListener('click', () => {
+      this.undoColorSimplification();
+    });
+    document.getElementById('simplify-colors-reset-btn')?.addEventListener('click', () => {
+      this.resetColorSimplification();
+    });
+    document.getElementById('simplify-colors-refresh-btn')?.addEventListener('click', () => {
+      this.regenerateColorSimplificationPreview();
+    });
+    document.getElementById('simplify-colors-slider')?.addEventListener('input', (event) => {
+      if (!this.simplificationDraft) return;
+      this.simplificationDraft.amount = Number(event.target.value);
+      this.updateSimplificationAmountLabel();
+      this.queueColorSimplificationPreview();
+    });
+    document.getElementById('simplify-colors-list')?.addEventListener('change', (event) => {
+      const checkbox = event.target.closest('[data-force-color]');
+      if (!checkbox || !this.simplificationDraft) return;
+      const color = checkbox.dataset.forceColor;
+      const forced = new Set(this.simplificationDraft.forcedColors);
+      if (checkbox.checked) forced.add(color);
+      else forced.delete(color);
+      this.simplificationDraft.forcedColors = [...forced];
+      this.previewColorSimplification();
+    });
+    document.getElementById('simplify-colors-modal')?.addEventListener('click', (event) => {
+      if (event.target === document.getElementById('simplify-colors-modal')) {
+        this.cancelColorSimplification();
+      }
+    });
+
     // Auto-arrange
     document.getElementById('auto-arrange-btn')?.addEventListener('click', () => this.autoArrange());
     document.getElementById('auto-assign-btn')?.addEventListener('click', () => this.autoAssignSvgs());
@@ -1011,8 +1073,238 @@ class PlotterStudio {
         console.warn('Failed to load preview for', svgData.filename);
         resolve({ ...svgData, previewImage: null });
       };
-      img.src = svgData.preview_url;
+      img.src = this.getSvgPreviewUrl(svgData.preview_url);
     });
+  }
+
+  getSvgPreviewUrl(previewUrl, version = this.colorSimplificationVersion) {
+    if (!previewUrl) return previewUrl;
+    const separator = previewUrl.includes('?') ? '&' : '?';
+    return `${previewUrl}${separator}simplify_version=${encodeURIComponent(version)}`;
+  }
+
+  cloneColorSimplificationState(state = this.colorSimplification) {
+    return {
+      amount: Number(state?.amount || 0),
+      forcedColors: [...(state?.forcedColors || [])],
+    };
+  }
+
+  colorSimplificationStatesEqual(first, second) {
+    if (!first || !second) return false;
+    if (Number(first.amount) !== Number(second.amount)) return false;
+    const firstForced = [...(first.forcedColors || [])].sort();
+    const secondForced = [...(second.forcedColors || [])].sort();
+    return firstForced.length === secondForced.length && firstForced.every((color, index) => color === secondForced[index]);
+  }
+
+  async loadColorSimplificationState({ reloadPreviews = false } = {}) {
+    try {
+      const response = await fetch('/api/color-simplification');
+      if (!response.ok) throw new Error('Failed to load colour simplification state');
+      const data = await response.json();
+      this.colorSimplification = {
+        amount: Number(data.amount || 0),
+        forcedColors: data.forced_colors || [],
+        replacementMap: data.replacement_map || {},
+        colors: data.colors || [],
+      };
+      this.colorSimplificationVersion = Number(data.preview_version || 0);
+      this.updateCanvasPalette();
+      if (reloadPreviews) await this.reloadSvgPreviews();
+    } catch (error) {
+      console.error('Error loading colour simplification state:', error);
+    }
+  }
+
+  updateSimplificationAmountLabel() {
+    const slider = document.getElementById('simplify-colors-slider');
+    const output = document.getElementById('simplify-colors-value');
+    if (slider && output) output.textContent = `${Math.round(Number(slider.value) * 100)}%`;
+  }
+
+  renderColorSimplificationModal() {
+    if (!this.simplificationDraft) return;
+    const slider = document.getElementById('simplify-colors-slider');
+    if (slider) slider.value = this.simplificationDraft.amount;
+    this.updateSimplificationAmountLabel();
+
+    const list = document.getElementById('simplify-colors-list');
+    if (!list) return;
+    const colors = this.colorSimplification.colors || [];
+    if (colors.length === 0) {
+      list.innerHTML = '<div class="simplify-colors-empty">Assign a sketch to a paper to see its colour mapping.</div>';
+    } else {
+      list.innerHTML = colors.map((color) => {
+        const source = color.hex;
+        const target = color.replacement || source;
+        const sourceChip = /^#[0-9a-f]{6,8}$/i.test(source) ? source : '#000000';
+        const targetChip = /^#[0-9a-f]{6,8}$/i.test(target) ? target : '#000000';
+        const mergedLabel = color.merged ? '<span class="simplify-colour-merged">merged</span>' : '';
+        return `
+          <div class="simplify-colour-row" title="${this.escapeHtml((color.sketches || []).join(', '))}">
+            <div class="simplify-colour-mapping">
+              <span class="simplify-colour-chip" style="background-color: ${sourceChip};"></span>
+              <span class="simplify-colour-source">${this.escapeHtml(source)}</span>
+              <span class="simplify-colour-arrow">→</span>
+              <span class="simplify-colour-chip" style="background-color: ${targetChip};"></span>
+              <span class="simplify-colour-target">${this.escapeHtml(target)}</span>
+              ${mergedLabel}
+            </div>
+            <label class="simplify-colour-force">
+              <input type="checkbox" data-force-color="${this.escapeHtml(source)}" ${color.forced ? 'checked' : ''}>
+              Keep
+            </label>
+          </div>
+        `;
+      }).join('');
+    }
+
+    const mergedCount = colors.filter((color) => color.merged).length;
+    const status = document.getElementById('simplify-colors-status');
+    if (status) {
+      status.classList.remove('is-updating');
+      status.textContent = this.simplificationDraft.amount === 0
+        ? 'Preview matches the original colours.'
+        : `${mergedCount} of ${colors.length} colours will be merged in the preview and export.`;
+    }
+    const undoButton = document.getElementById('simplify-colors-undo-btn');
+    if (undoButton) undoButton.disabled = this.simplificationHistory.length === 0;
+    if (window.lucide) lucide.createIcons({ nodes: [list] });
+  }
+
+  async openColorSimplificationModal() {
+    await this.loadColorSimplificationState();
+    this.simplificationDraft = this.cloneColorSimplificationState();
+    this.simplificationInitialState = this.cloneColorSimplificationState();
+    this.simplificationLastPreviewState = this.cloneColorSimplificationState();
+    this.simplificationHistory = [];
+    this.renderColorSimplificationModal();
+    document.getElementById('simplify-colors-modal')?.classList.add('active');
+    if (window.lucide) lucide.createIcons({ nodes: [document.getElementById('simplify-colors-modal')] });
+  }
+
+  setSimplificationStatus(message, updating = false) {
+    const status = document.getElementById('simplify-colors-status');
+    if (!status) return;
+    status.textContent = message;
+    status.classList.toggle('is-updating', updating);
+  }
+
+  queueColorSimplificationPreview() {
+    clearTimeout(this.simplificationPreviewTimer);
+    this.setSimplificationStatus('Regenerating preview…', true);
+    this.simplificationPreviewTimer = setTimeout(() => this.previewColorSimplification(), 180);
+  }
+
+  async previewColorSimplification(recordHistory = true) {
+    if (!this.simplificationDraft) return;
+    const nextState = this.cloneColorSimplificationState(this.simplificationDraft);
+    const previousState = this.simplificationLastPreviewState || this.cloneColorSimplificationState();
+    if (this.colorSimplificationStatesEqual(nextState, previousState)) {
+      this.renderColorSimplificationModal();
+      return;
+    }
+    if (recordHistory) this.simplificationHistory.push(previousState);
+    this.simplificationLastPreviewState = nextState;
+    this.setSimplificationStatus('Regenerating preview…', true);
+
+    try {
+      const response = await fetch('/api/color-simplification/preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          amount: nextState.amount,
+          forced_colors: nextState.forcedColors,
+        }),
+      });
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to simplify colours');
+      }
+      const data = await response.json();
+      this.colorSimplification = {
+        amount: Number(data.amount || 0),
+        forcedColors: data.forced_colors || [],
+        replacementMap: data.replacement_map || {},
+        colors: data.colors || [],
+      };
+      this.colorSimplificationVersion = Number(data.preview_version || 0);
+      await this.reloadSvgPreviews();
+      this.updateCanvasPalette();
+      this.renderColorSimplificationModal();
+    } catch (error) {
+      if (recordHistory) this.simplificationHistory.pop();
+      this.simplificationLastPreviewState = previousState;
+      this.simplificationDraft = this.cloneColorSimplificationState(previousState);
+      this.renderColorSimplificationModal();
+      await showAlert('Simplify colours', error.message, 'error');
+    }
+  }
+
+  async reloadSvgPreviews() {
+    await Promise.all(this.svgLibrary.map((svg) => new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        svg.previewImage = img;
+        resolve();
+      };
+      img.onerror = () => {
+        svg.previewImage = null;
+        resolve();
+      };
+      img.src = this.getSvgPreviewUrl(svg.preview_url);
+    })));
+    this.render();
+  }
+
+  async regenerateColorSimplificationPreview() {
+    this.setSimplificationStatus('Regenerating preview…', true);
+    try {
+      await this.reloadSvgPreviews();
+      this.renderColorSimplificationModal();
+    } catch (error) {
+      await showAlert('Simplify colours', error.message, 'error');
+    }
+  }
+
+  async undoColorSimplification() {
+    clearTimeout(this.simplificationPreviewTimer);
+    const previousState = this.simplificationHistory.pop();
+    if (!previousState) return;
+    this.simplificationDraft = this.cloneColorSimplificationState(previousState);
+    await this.previewColorSimplification(false);
+  }
+
+  async resetColorSimplification() {
+    clearTimeout(this.simplificationPreviewTimer);
+    this.simplificationDraft = { amount: 0, forcedColors: [] };
+    await this.previewColorSimplification();
+  }
+
+  async cancelColorSimplification() {
+    clearTimeout(this.simplificationPreviewTimer);
+    const modal = document.getElementById('simplify-colors-modal');
+    if (this.simplificationInitialState && !this.colorSimplificationStatesEqual(
+      this.simplificationInitialState,
+      this.simplificationLastPreviewState,
+    )) {
+      this.simplificationDraft = this.cloneColorSimplificationState(this.simplificationInitialState);
+      await this.previewColorSimplification(false);
+    }
+    modal?.classList.remove('active');
+    this.simplificationDraft = null;
+    this.simplificationInitialState = null;
+    this.simplificationHistory = [];
+  }
+
+  applyColorSimplification() {
+    clearTimeout(this.simplificationPreviewTimer);
+    document.getElementById('simplify-colors-modal')?.classList.remove('active');
+    this.simplificationDraft = null;
+    this.simplificationInitialState = null;
+    this.simplificationHistory = [];
+    showToast('Colour simplification applied', 'success');
   }
 
   updateSvgLibraryList() {
@@ -1076,6 +1368,61 @@ class PlotterStudio {
     });
 
     if (window.lucide) lucide.createIcons({ nodes: [list] });
+  }
+
+  updateCanvasPalette() {
+    const palette = document.getElementById('inspector-palette');
+    const count = document.getElementById('inspector-palette-count');
+    if (!palette) return;
+
+    const colours = new Map();
+    for (const paper of this.papers) {
+      if (!paper.svg_id) continue;
+
+      const svg = this.svgLibrary.find((entry) => entry.id === paper.svg_id);
+      const svgColours = svg?.colors || paper.svg?.colors || [];
+      const sketchName = svg?.filename || paper.svg?.filename || 'Sketch';
+
+      for (const colour of svgColours) {
+        const rawHex = typeof colour === 'string' ? colour : colour?.hex;
+        if (!rawHex) continue;
+        const sourceHex = rawHex.toLowerCase();
+        const hex = (this.colorSimplification.replacementMap[sourceHex] || sourceHex).toLowerCase();
+        if (!/^#[0-9a-f]{6}(?:[0-9a-f]{2})?$/.test(hex)) continue;
+
+        if (!colours.has(hex)) {
+          colours.set(hex, {
+            hex,
+            name: typeof colour === 'string' ? '' : (colour.name || ''),
+            sketches: new Set(),
+          });
+        }
+        colours.get(hex).sketches.add(sketchName);
+      }
+    }
+
+    if (colours.size === 0) {
+      palette.innerHTML = '';
+      if (count) count.textContent = '';
+      return;
+    }
+
+    const entries = [...colours.values()];
+    if (count) count.textContent = `${entries.length} ${entries.length === 1 ? 'colour' : 'colours'}`;
+    palette.innerHTML = `
+      <div class="inspector-palette-list">
+        ${entries.map((entry) => {
+          const sketchNames = [...entry.sketches].join(', ');
+          const label = entry.name ? `${entry.name} · ${entry.hex}` : entry.hex;
+          return `
+            <div class="inspector-swatch" title="${this.escapeHtml(`${label} · ${sketchNames}`)}">
+              <span class="inspector-swatch-colour" style="background-color: ${entry.hex};"></span>
+              <span class="inspector-swatch-label">${this.escapeHtml(entry.hex)}</span>
+            </div>
+          `;
+        }).join('')}
+      </div>
+    `;
   }
 
   async loadPapers() {
@@ -1189,6 +1536,7 @@ class PlotterStudio {
         this.selectedPaperId = null;
       }
       this.selectedPaperIds.delete(paperId);
+      await this.loadColorSimplificationState({ reloadPreviews: true });
       this.refresh();
     } catch (error) {
       console.error('Error removing paper:', error);
@@ -1221,6 +1569,7 @@ class PlotterStudio {
         console.error('Error removing paper:', e);
       }
     }
+    await this.loadColorSimplificationState({ reloadPreviews: true });
     this.refresh();
   }
 
@@ -1289,6 +1638,7 @@ class PlotterStudio {
 
       // Update UI
       this.updateSvgLibraryList();
+      await this.loadColorSimplificationState({ reloadPreviews: true });
       this.refresh();
     } catch (error) {
       console.error('Error removing SVG:', error);
@@ -1667,6 +2017,7 @@ class PlotterStudio {
       if (response.ok) {
         const result = await response.json();
         Object.assign(paper, result.paper);
+        await this.loadColorSimplificationState({ reloadPreviews: true });
         this.updatePaperList();
         this.updateInspector();
         this.render();
@@ -2299,6 +2650,8 @@ class PlotterStudio {
       // Clear local state
       this.papers = [];
       this.svgLibrary = [];
+      this.colorSimplification = { amount: 0, forcedColors: [], replacementMap: {}, colors: [] };
+      this.colorSimplificationVersion = 0;
       this.selectedPaperId = null;
       this.selectedPaperIds.clear();
 
