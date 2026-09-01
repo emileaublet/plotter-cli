@@ -1202,13 +1202,15 @@ def align_papers():
         for p in papers:
             p["y"] = max_y - p["paper_height"]
     elif action == "center_h":
-        center_x = (min_x + max_x) / 2
-        for p in papers:
-            p["x"] = center_x - p["paper_width"] / 2
-    elif action == "center_v":
+        # Center on the horizontal axis: align the papers' Y centers.
         center_y = (min_y + max_y) / 2
         for p in papers:
             p["y"] = center_y - p["paper_height"] / 2
+    elif action == "center_v":
+        # Center on the vertical axis: align the papers' X centers.
+        center_x = (min_x + max_x) / 2
+        for p in papers:
+            p["x"] = center_x - p["paper_width"] / 2
     elif action == "distribute_h":
         papers_sorted = sorted(papers, key=lambda p: p["x"])
         total_paper_w = sum(p["paper_width"] for p in papers_sorted)

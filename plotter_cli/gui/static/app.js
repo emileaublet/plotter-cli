@@ -157,6 +157,10 @@ class PlotterStudio {
 
     // Snap-to-grid
     this.snapToGrid = false;
+    // Snap-to-objects guides are enabled by default, like in a design tool.
+    this.snapToObjects = true;
+    this.activeSnapGuides = [];
+    this.activeSpacingGuides = [];
 
     // Last mouse event (for zoom coordinate update)
     this.lastMouseEvent = null;
@@ -758,6 +762,7 @@ class PlotterStudio {
 
     // Snap-to-grid toggle (Item 21)
     document.getElementById('snap-grid-btn')?.addEventListener('click', () => this.toggleSnapToGrid());
+    document.getElementById('snap-objects-btn')?.addEventListener('click', () => this.toggleSnapToObjects());
 
     // Undo/redo buttons (Item 23)
     document.getElementById('undo-btn')?.addEventListener('click', () => this.undo());
@@ -885,6 +890,18 @@ class PlotterStudio {
     this.snapToGrid = !this.snapToGrid;
     const btn = document.getElementById('snap-grid-btn');
     if (btn) btn.classList.toggle('active', this.snapToGrid);
+    this.render();
+  }
+
+  toggleSnapToObjects() {
+    this.snapToObjects = !this.snapToObjects;
+    this.activeSnapGuides = [];
+    this.activeSpacingGuides = [];
+    const btn = document.getElementById('snap-objects-btn');
+    if (btn) {
+      btn.classList.toggle('active', this.snapToObjects);
+      btn.setAttribute('aria-pressed', String(this.snapToObjects));
+    }
     this.render();
   }
 
@@ -2144,6 +2161,272 @@ class PlotterStudio {
     };
   }
 
+  // Unlike getPaperBounds(), these bounds describe the visible axis-aligned
+  // rectangle. That keeps snapping useful when a paper has been rotated.
+  getPaperVisualBounds(paper, position = {}) {
+    const x = position.x ?? paper.x ?? 0;
+    const y = position.y ?? paper.y ?? 0;
+    const width = paper.paper_width || 0;
+    const height = paper.paper_height || 0;
+    const rotation = (paper.rotation || 0) * (Math.PI / 180);
+    const rotatedWidth = Math.abs(width * Math.cos(rotation)) + Math.abs(height * Math.sin(rotation));
+    const rotatedHeight = Math.abs(width * Math.sin(rotation)) + Math.abs(height * Math.cos(rotation));
+    const centerX = x + width / 2;
+    const centerY = y + height / 2;
+
+    return {
+      minX: centerX - rotatedWidth / 2,
+      minY: centerY - rotatedHeight / 2,
+      maxX: centerX + rotatedWidth / 2,
+      maxY: centerY + rotatedHeight / 2,
+    };
+  }
+
+  getDraggingPaperIds() {
+    const ids = this.selectedPaperIds.size > 0
+      ? [...this.selectedPaperIds]
+      : (this.selectedPaperId ? [this.selectedPaperId] : []);
+    return ids.filter((id) => {
+      const paper = this.papers.find((p) => p.id === id);
+      return paper && !paper.locked && this.dragStartPositions[id];
+    });
+  }
+
+  getSelectionSnapBounds(ids, dx = 0, dy = 0) {
+    const bounds = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity };
+
+    for (const id of ids) {
+      const paper = this.papers.find((p) => p.id === id);
+      const start = this.dragStartPositions[id];
+      if (!paper || !start) continue;
+
+      const paperBounds = this.getPaperVisualBounds(paper, {
+        x: start.x + dx,
+        y: start.y + dy,
+      });
+      bounds.minX = Math.min(bounds.minX, paperBounds.minX);
+      bounds.minY = Math.min(bounds.minY, paperBounds.minY);
+      bounds.maxX = Math.max(bounds.maxX, paperBounds.maxX);
+      bounds.maxY = Math.max(bounds.maxY, paperBounds.maxY);
+    }
+
+    return bounds;
+  }
+
+  getSnapCandidates(axis, excludedIds) {
+    const isX = axis === 'x';
+    const candidates = isX
+      ? [
+        { value: 0, label: 'Canvas left edge' },
+        { value: this.canvasWidth / 2, label: 'Canvas center X' },
+        { value: this.canvasWidth, label: 'Canvas right edge' },
+      ]
+      : [
+        { value: 0, label: 'Canvas top edge' },
+        { value: this.canvasHeight / 2, label: 'Canvas center Y' },
+        { value: this.canvasHeight, label: 'Canvas bottom edge' },
+      ];
+
+    for (const paper of this.papers) {
+      if (excludedIds.has(paper.id)) continue;
+      const bounds = this.getPaperVisualBounds(paper);
+      const name = paper.paper_name || 'Paper';
+      if (isX) {
+        candidates.push({ value: bounds.minX, label: `${name} left edge` });
+        candidates.push({ value: (bounds.minX + bounds.maxX) / 2, label: `${name} center X` });
+        candidates.push({ value: bounds.maxX, label: `${name} right edge` });
+      } else {
+        candidates.push({ value: bounds.minY, label: `${name} top edge` });
+        candidates.push({ value: (bounds.minY + bounds.maxY) / 2, label: `${name} center Y` });
+        candidates.push({ value: bounds.maxY, label: `${name} bottom edge` });
+      }
+    }
+
+    return candidates;
+  }
+
+  findAxisSnap(axis, rawDelta, bounds, candidates) {
+    const isX = axis === 'x';
+    const min = isX ? bounds.minX : bounds.minY;
+    const max = isX ? bounds.maxX : bounds.maxY;
+    const anchors = [
+      { value: min, label: isX ? 'left edge' : 'top edge' },
+      { value: (min + max) / 2, label: isX ? 'center X' : 'center Y' },
+      { value: max, label: isX ? 'right edge' : 'bottom edge' },
+    ];
+    const threshold = this.getSnapThreshold();
+    let best = null;
+
+    for (const anchor of anchors) {
+      for (const candidate of candidates) {
+        const distance = Math.abs(candidate.value - anchor.value);
+        if (distance > threshold || (best && distance >= best.distance)) continue;
+        best = {
+          delta: rawDelta + candidate.value - anchor.value,
+          distance,
+          guide: {
+            axis,
+            value: candidate.value,
+            label: `${anchor.label} → ${candidate.label}`,
+          },
+        };
+      }
+    }
+
+    return best;
+  }
+
+  getSnapThreshold() {
+    return Math.min(8, Math.max(0.75, 8 / (this.scale * Math.max(this.canvasTransform.scale, 0.1))));
+  }
+
+  formatSnapDistance(distance) {
+    return Math.abs(distance - Math.round(distance)) < 0.05
+      ? String(Math.round(distance))
+      : distance.toFixed(1);
+  }
+
+  findSpacingSnap(axis, rawDelta, bounds, excludedIds) {
+    const isX = axis === 'x';
+    const threshold = this.getSnapThreshold();
+    const stationary = this.papers
+      .filter((paper) => !excludedIds.has(paper.id))
+      .map((paper) => ({ paper, bounds: this.getPaperVisualBounds(paper) }));
+    const movingSize = isX ? bounds.maxX - bounds.minX : bounds.maxY - bounds.minY;
+    const pairs = [];
+    let best = null;
+
+    for (let i = 0; i < stationary.length; i += 1) {
+      for (let j = i + 1; j < stationary.length; j += 1) {
+        const first = stationary[i].bounds;
+        const second = stationary[j].bounds;
+        const firstCrossCenter = isX ? (first.minY + first.maxY) / 2 : (first.minX + first.maxX) / 2;
+        const secondCrossCenter = isX ? (second.minY + second.maxY) / 2 : (second.minX + second.maxX) / 2;
+        if (Math.abs(firstCrossCenter - secondCrossCenter) > threshold) continue;
+
+        const ordered = isX
+          ? [first, second].sort((a, b) => a.minX - b.minX)
+          : [first, second].sort((a, b) => a.minY - b.minY);
+        const leading = ordered[0];
+        const trailing = ordered[1];
+        const gap = isX
+          ? trailing.minX - leading.maxX
+          : trailing.minY - leading.maxY;
+        if (gap < -threshold) continue;
+        pairs.push({ leading, trailing, gap: Math.max(0, gap), crossCenter: (firstCrossCenter + secondCrossCenter) / 2 });
+      }
+    }
+
+    for (const pair of pairs) {
+      const { leading, trailing, gap, crossCenter } = pair;
+      const movingCrossCenter = isX ? (bounds.minY + bounds.maxY) / 2 : (bounds.minX + bounds.maxX) / 2;
+      if (Math.abs(movingCrossCenter - crossCenter) > threshold) continue;
+      const placements = isX
+        ? [
+          { edge: 'min', target: trailing.maxX + gap, start: trailing.maxX + gap, end: trailing.maxX + gap + movingSize, cross: (bounds.minY + bounds.maxY) / 2 },
+          { edge: 'max', target: leading.minX - gap - movingSize, start: leading.minX - gap - movingSize, end: leading.minX - gap, cross: (bounds.minY + bounds.maxY) / 2 },
+          ...(trailing.minX - leading.maxX >= movingSize + gap * 2
+            ? [{ edge: 'min', target: leading.maxX + gap, start: leading.maxX + gap, end: leading.maxX + gap + movingSize, cross: crossCenter }]
+            : []),
+        ]
+        : [
+          { edge: 'min', target: trailing.maxY + gap, start: trailing.maxY + gap, end: trailing.maxY + gap + movingSize, cross: (bounds.minX + bounds.maxX) / 2 },
+          { edge: 'max', target: leading.minY - gap - movingSize, start: leading.minY - gap - movingSize, end: leading.minY - gap, cross: (bounds.minX + bounds.maxX) / 2 },
+          ...(trailing.minY - leading.maxY >= movingSize + gap * 2
+            ? [{ edge: 'min', target: leading.maxY + gap, start: leading.maxY + gap, end: leading.maxY + gap + movingSize, cross: crossCenter }]
+            : []),
+        ];
+
+      for (const placement of placements) {
+        const currentEdge = placement.edge === 'min'
+          ? (isX ? bounds.minX : bounds.minY)
+          : (isX ? bounds.maxX : bounds.maxY);
+        const distance = Math.abs(placement.target - currentEdge);
+        if (distance > threshold || (best && distance >= best.distance)) continue;
+
+        const existingStart = isX ? leading.maxX : leading.maxY;
+        const existingEnd = isX ? trailing.minX : trailing.minY;
+        const newStart = placement.start;
+        const newEnd = placement.end;
+        const position = placement.cross;
+        const makeGuide = (start, end, guidePosition) => ({
+          kind: 'spacing',
+          orientation: isX ? 'horizontal' : 'vertical',
+          start,
+          end,
+          position: guidePosition,
+          label: this.formatSnapDistance(gap),
+        });
+
+        best = {
+          delta: rawDelta + placement.target - currentEdge,
+          distance,
+          guides: [
+            makeGuide(existingStart, existingEnd, isX ? pair.crossCenter : position),
+            makeGuide(newStart, newEnd, position),
+          ],
+        };
+      }
+    }
+
+    return best;
+  }
+
+  getSnappedDragDelta(ids, dx, dy) {
+    const result = { dx, dy, guides: [], spacingGuides: [] };
+    const startBounds = this.getSelectionSnapBounds(ids);
+
+    if (this.snapToObjects) {
+      const excludedIds = new Set(ids);
+      const rawBounds = this.getSelectionSnapBounds(ids, dx, dy);
+      const xSnap = this.findAxisSnap(
+        'x',
+        dx,
+        rawBounds,
+        this.getSnapCandidates('x', excludedIds),
+      );
+      const ySnap = this.findAxisSnap(
+        'y',
+        dy,
+        rawBounds,
+        this.getSnapCandidates('y', excludedIds),
+      );
+      const xSpacingBounds = this.getSelectionSnapBounds(ids, dx, ySnap ? ySnap.delta : dy);
+      const ySpacingBounds = this.getSelectionSnapBounds(ids, xSnap ? xSnap.delta : dx, dy);
+      const xSpacingSnap = this.findSpacingSnap('x', dx, xSpacingBounds, excludedIds);
+      const ySpacingSnap = this.findSpacingSnap('y', dy, ySpacingBounds, excludedIds);
+      const selectedXSnap = xSpacingSnap && (!xSnap || xSpacingSnap.distance <= xSnap.distance) ? xSpacingSnap : xSnap;
+      const selectedYSnap = ySpacingSnap && (!ySnap || ySpacingSnap.distance <= ySnap.distance) ? ySpacingSnap : ySnap;
+
+      if (selectedXSnap) {
+        result.dx = selectedXSnap.delta;
+        if (selectedXSnap.guides) result.spacingGuides.push(...selectedXSnap.guides);
+        else result.guides.push(selectedXSnap.guide);
+      }
+      if (selectedYSnap) {
+        result.dy = selectedYSnap.delta;
+        if (selectedYSnap.guides) result.spacingGuides.push(...selectedYSnap.guides);
+        else result.guides.push(selectedYSnap.guide);
+      }
+    }
+
+    // Grid snapping remains a fallback for each axis. Object alignment wins
+    // when both helpers are close, so a paper does not visibly jump away from
+    // a clear edge/center guide.
+    const hasXSnap = result.guides.some((guide) => guide.axis === 'x')
+      || result.spacingGuides.some((guide) => guide.orientation === 'horizontal');
+    const hasYSnap = result.guides.some((guide) => guide.axis === 'y')
+      || result.spacingGuides.some((guide) => guide.orientation === 'vertical');
+    if (this.snapToGrid && !hasXSnap) {
+      result.dx = Math.round((startBounds.minX + dx) / 10) * 10 - startBounds.minX;
+    }
+    if (this.snapToGrid && !hasYSnap) {
+      result.dy = Math.round((startBounds.minY + dy) / 10) * 10 - startBounds.minY;
+    }
+
+    return result;
+  }
+
   paperAtPoint(point) {
     for (let i = this.papers.length - 1; i >= 0; i -= 1) {
       const paper = this.papers[i];
@@ -2193,6 +2476,8 @@ class PlotterStudio {
 
       if (!hitPaper.locked) {
         this.dragging = true;
+        this.activeSnapGuides = [];
+        this.activeSpacingGuides = [];
         this.dragStart = point;
         this.dragStartTransform = { x: hitPaper.x || 0, y: hitPaper.y || 0 };
         // Item 22: save start positions for all selected papers
@@ -2240,21 +2525,22 @@ class PlotterStudio {
     const dy = point.y - this.dragStart.y;
 
     // Item 22: move all selected papers together when dragging
-    const idsToMove = this.selectedPaperIds.size > 0 ? [...this.selectedPaperIds] : [this.selectedPaperId];
+    const idsToMove = this.getDraggingPaperIds();
+    if (idsToMove.length === 0) {
+      this.activeSnapGuides = [];
+      this.activeSpacingGuides = [];
+      return;
+    }
+    const snappedDelta = this.getSnappedDragDelta(idsToMove, dx, dy);
+    this.activeSnapGuides = snappedDelta.guides;
+    this.activeSpacingGuides = snappedDelta.spacingGuides;
     for (const pid of idsToMove) {
       const p = this.papers.find(pp => pp.id === pid);
       if (!p || p.locked) continue;
       const startPos = this.dragStartPositions[pid];
       if (!startPos) continue;
-      let newX = startPos.x + dx;
-      let newY = startPos.y + dy;
-      // Item 21: snap to grid
-      if (this.snapToGrid) {
-        newX = Math.round(newX / 10) * 10;
-        newY = Math.round(newY / 10) * 10;
-      }
-      p.x = newX;
-      p.y = newY;
+      p.x = startPos.x + snappedDelta.dx;
+      p.y = startPos.y + snappedDelta.dy;
     }
 
     // Update inspector inputs for primary selected paper
@@ -2274,8 +2560,13 @@ class PlotterStudio {
     }
 
     if (this.dragging && this.selectedPaperId) {
+      const idsToUpdate = this.getDraggingPaperIds();
+      this.dragging = false;
+      this.activeSnapGuides = [];
+      this.activeSpacingGuides = [];
+      this.render();
+
       // Item 22: update all selected papers' positions
-      const idsToUpdate = this.selectedPaperIds.size > 0 ? [...this.selectedPaperIds] : [this.selectedPaperId];
       for (const pid of idsToUpdate) {
         const p = this.papers.find(pp => pp.id === pid);
         if (p) {
@@ -2286,8 +2577,11 @@ class PlotterStudio {
     }
 
     this.dragging = false;
+    this.activeSnapGuides = [];
+    this.activeSpacingGuides = [];
     this.dragStartTransform = null;
     this.dragStartPositions = {};
+    this.render();
   }
 
   render() {
@@ -2309,6 +2603,98 @@ class PlotterStudio {
     for (const paper of this.papers) {
       this.drawPaper(paper);
     }
+
+    this.drawSnapGuides();
+    this.drawSpacingGuides();
+  }
+
+  drawSnapGuides() {
+    if (!this.activeSnapGuides || this.activeSnapGuides.length === 0) return;
+
+    this.ctx.save();
+    this.ctx.strokeStyle = '#ff20d0';
+    // Keep the guide a visible couple of screen pixels at every zoom level.
+    this.ctx.lineWidth = 2 / Math.max(this.canvasTransform.scale, 0.1);
+
+    for (const guide of this.activeSnapGuides) {
+      const position = guide.value * this.scale;
+      this.ctx.beginPath();
+      if (guide.axis === 'x') {
+        this.ctx.moveTo(position, 0);
+        this.ctx.lineTo(position, this.canvas.height);
+      } else {
+        this.ctx.moveTo(0, position);
+        this.ctx.lineTo(this.canvas.width, position);
+      }
+      this.ctx.stroke();
+    }
+
+    this.ctx.restore();
+  }
+
+  drawSpacingGuides() {
+    if (!this.activeSpacingGuides || this.activeSpacingGuides.length === 0) return;
+
+    const zoom = Math.max(this.canvasTransform.scale, 0.1);
+    const lineWidth = 2 / zoom;
+    const arrowSize = 5 / zoom;
+    const padding = 4 / zoom;
+    const labelHeight = 16 / zoom;
+
+    this.ctx.save();
+    this.ctx.strokeStyle = '#f0442e';
+    this.ctx.fillStyle = 'rgba(180, 45, 27, 0.96)';
+    this.ctx.lineWidth = lineWidth;
+    this.ctx.font = `${10 / zoom}px sans-serif`;
+    this.ctx.textAlign = 'center';
+    this.ctx.textBaseline = 'middle';
+
+    for (const guide of this.activeSpacingGuides) {
+      const start = guide.start * this.scale;
+      const end = guide.end * this.scale;
+      const position = guide.position * this.scale;
+      const isHorizontal = guide.orientation === 'horizontal';
+
+      this.ctx.beginPath();
+      if (isHorizontal) {
+        this.ctx.moveTo(start, position);
+        this.ctx.lineTo(end, position);
+      } else {
+        this.ctx.moveTo(position, start);
+        this.ctx.lineTo(position, end);
+      }
+      this.ctx.stroke();
+
+      // Small end caps/arrows make the measured gap readable at low zoom.
+      this.ctx.beginPath();
+      if (isHorizontal) {
+        this.ctx.moveTo(start + arrowSize, position - arrowSize / 2);
+        this.ctx.lineTo(start, position);
+        this.ctx.lineTo(start + arrowSize, position + arrowSize / 2);
+        this.ctx.moveTo(end - arrowSize, position - arrowSize / 2);
+        this.ctx.lineTo(end, position);
+        this.ctx.lineTo(end - arrowSize, position + arrowSize / 2);
+      } else {
+        this.ctx.moveTo(position - arrowSize / 2, start + arrowSize);
+        this.ctx.lineTo(position, start);
+        this.ctx.lineTo(position + arrowSize / 2, start + arrowSize);
+        this.ctx.moveTo(position - arrowSize / 2, end - arrowSize);
+        this.ctx.lineTo(position, end);
+        this.ctx.lineTo(position + arrowSize / 2, end);
+      }
+      this.ctx.stroke();
+
+      const textWidth = this.ctx.measureText(guide.label).width;
+      const labelWidth = textWidth + padding * 2;
+      const labelX = isHorizontal ? (start + end) / 2 : position;
+      const labelY = isHorizontal ? position : (start + end) / 2;
+      this.ctx.fillRect(labelX - labelWidth / 2, labelY - labelHeight / 2, labelWidth, labelHeight);
+      this.ctx.fillStyle = '#fff4f1';
+      this.ctx.fillText(guide.label, labelX, labelY);
+      this.ctx.fillStyle = 'rgba(180, 45, 27, 0.96)';
+    }
+
+    this.ctx.restore();
   }
 
   drawGrid() {

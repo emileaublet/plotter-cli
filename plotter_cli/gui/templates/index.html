@@ -217,7 +217,10 @@
             </div>
             <div class="toolbar-divider"></div>
             <div class="toolbar-group">
-              <!-- Snap to Grid (Item 21) -->
+              <!-- Snap helpers -->
+              <button id="snap-objects-btn" class="tool-btn active" title="Snap to Objects and Canvas Guides" aria-label="Snap to Objects and Canvas Guides" aria-pressed="true">
+                <i data-lucide="magnet" style="width: 16px; height: 16px;"></i>
+              </button>
               <button id="snap-grid-btn" class="tool-btn" title="Snap to Grid">
                 <i data-lucide="grid-3x3" style="width: 16px; height: 16px;"></i>
               </button>
@@ -558,6 +561,7 @@
                 <tr><td style="padding: 5px 8px; color: var(--muted-foreground);">Delete / Backspace</td><td style="padding: 5px 8px;">Remove selected paper</td></tr>
                 <tr><td style="padding: 5px 8px; color: var(--muted-foreground);">←↑→↓</td><td style="padding: 5px 8px;">Nudge 1mm</td></tr>
                 <tr><td style="padding: 5px 8px; color: var(--muted-foreground);">Shift + ←↑→↓</td><td style="padding: 5px 8px;">Nudge 0.1mm</td></tr>
+                <tr><td style="padding: 5px 8px; color: var(--muted-foreground);">Magnet button</td><td style="padding: 5px 8px;">Snap to paper edges, centers, and canvas guides while dragging</td></tr>
                 <tr><td style="padding: 5px 8px; color: var(--muted-foreground);">Shift + Click</td><td style="padding: 5px 8px;">Multi-select paper</td></tr>
                 <tr><td style="padding: 5px 8px; color: var(--muted-foreground);">Cmd/Ctrl + Z</td><td style="padding: 5px 8px;">Undo</td></tr>
                 <tr><td style="padding: 5px 8px; color: var(--muted-foreground);">Cmd/Ctrl + Shift + Z</td><td style="padding: 5px 8px;">Redo</td></tr>
