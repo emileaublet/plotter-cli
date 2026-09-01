@@ -262,6 +262,9 @@ class PlotterStudio {
     await this.loadColorSimplificationState();
     await Promise.all([this.loadSvgLibrary(), this.loadPapers()]);
     await this.loadColorSimplificationState();
+    // Run once more after the native title bar and all panels have settled so
+    // the first visible frame uses the real workspace dimensions.
+    this.fitCanvas();
     this.render();
     this.updateCanvasPalette();
     this.updateInspector();
@@ -599,9 +602,33 @@ class PlotterStudio {
     this.canvas.height = pixelHeight;
     this.canvas.style.width = `${pixelWidth}px`;
     this.canvas.style.height = `${pixelHeight}px`;
-    
-    // Center canvas initially
-    this.centerCanvas();
+
+    // Start with the whole machine bed visible in the available workspace.
+    // The user can still use the zoom controls or mouse wheel immediately
+    // afterwards, and resetView intentionally keeps its 100% behaviour.
+    this.fitCanvas();
+  }
+
+  fitCanvas() {
+    if (!this.container || !this.canvas) return;
+
+    const availableWidth = this.container.clientWidth - 24;
+    const availableHeight = this.container.clientHeight - 24;
+    if (availableWidth <= 0 || availableHeight <= 0) {
+      requestAnimationFrame(() => this.fitCanvas());
+      return;
+    }
+
+    const canvasWidth = this.canvasWidth * this.scale;
+    const canvasHeight = this.canvasHeight * this.scale;
+    const fitScale = Math.min(1, availableWidth / canvasWidth, availableHeight / canvasHeight);
+
+    this.canvasTransform = {
+      x: 0,
+      y: 0,
+      scale: Math.max(0.1, fitScale),
+    };
+    this.updateZoomDisplay();
   }
 
   setupEventListeners() {
@@ -2596,7 +2623,8 @@ class PlotterStudio {
     this.ctx.fillStyle = '#ffffff';
     this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
 
-    // Draw grid (moves with container transform)
+    // Draw the bed grid as a quiet dot field, matching the sketch-2 workspace
+    // while keeping the 10mm snap rhythm visible during placement.
     this.drawGrid();
 
     // Draw papers (move with container transform)
@@ -2612,7 +2640,7 @@ class PlotterStudio {
     if (!this.activeSnapGuides || this.activeSnapGuides.length === 0) return;
 
     this.ctx.save();
-    this.ctx.strokeStyle = '#ff20d0';
+    this.ctx.strokeStyle = '#6b6b66';
     // Keep the guide a visible couple of screen pixels at every zoom level.
     this.ctx.lineWidth = 2 / Math.max(this.canvasTransform.scale, 0.1);
 
@@ -2642,8 +2670,8 @@ class PlotterStudio {
     const labelHeight = 16 / zoom;
 
     this.ctx.save();
-    this.ctx.strokeStyle = '#f0442e';
-    this.ctx.fillStyle = 'rgba(180, 45, 27, 0.96)';
+    this.ctx.strokeStyle = '#8f5a32';
+    this.ctx.fillStyle = 'rgba(143, 90, 50, 0.96)';
     this.ctx.lineWidth = lineWidth;
     this.ctx.font = `${10 / zoom}px sans-serif`;
     this.ctx.textAlign = 'center';
@@ -2691,7 +2719,7 @@ class PlotterStudio {
       this.ctx.fillRect(labelX - labelWidth / 2, labelY - labelHeight / 2, labelWidth, labelHeight);
       this.ctx.fillStyle = '#fff4f1';
       this.ctx.fillText(guide.label, labelX, labelY);
-      this.ctx.fillStyle = 'rgba(180, 45, 27, 0.96)';
+      this.ctx.fillStyle = 'rgba(143, 90, 50, 0.96)';
     }
 
     this.ctx.restore();
@@ -2699,33 +2727,18 @@ class PlotterStudio {
 
   drawGrid() {
     const gridSizePx = 10 * this.scale;
-
-    if (this.snapToGrid) {
-      // Item 21: prominent snap-to-grid lines (dotted, slightly more visible)
-      this.ctx.strokeStyle = 'rgba(100, 149, 237, 0.35)';
-      this.ctx.lineWidth = 1;
-      this.ctx.setLineDash([2, 4]);
-    } else {
-      this.ctx.strokeStyle = '#e0e0e0';
-      this.ctx.lineWidth = 1;
-      this.ctx.setLineDash([]);
-    }
+    const dotRadius = (this.snapToGrid ? 1.1 : 0.75) / Math.max(this.scale, 0.1);
+    this.ctx.fillStyle = this.snapToGrid
+      ? 'rgba(32, 32, 32, 0.18)'
+      : 'rgba(32, 32, 32, 0.10)';
 
     for (let x = 0; x <= this.canvasWidth * this.scale; x += gridSizePx) {
-      this.ctx.beginPath();
-      this.ctx.moveTo(x, 0);
-      this.ctx.lineTo(x, this.canvas.height);
-      this.ctx.stroke();
+      for (let y = 0; y <= this.canvasHeight * this.scale; y += gridSizePx) {
+        this.ctx.beginPath();
+        this.ctx.arc(x, y, dotRadius, 0, Math.PI * 2);
+        this.ctx.fill();
+      }
     }
-
-    for (let y = 0; y <= this.canvasHeight * this.scale; y += gridSizePx) {
-      this.ctx.beginPath();
-      this.ctx.moveTo(0, y);
-      this.ctx.lineTo(this.canvas.width, y);
-      this.ctx.stroke();
-    }
-
-    this.ctx.setLineDash([]);
   }
 
   drawPaper(paper) {
@@ -2743,7 +2756,7 @@ class PlotterStudio {
     this.ctx.rotate(rotation);
 
     // Paper outline
-    this.ctx.strokeStyle = '#ffaa00';
+    this.ctx.strokeStyle = '#9a9a94';
     this.ctx.lineWidth = 2 / this.scale;
     this.ctx.setLineDash([10 / this.scale, 5 / this.scale]);
     this.ctx.strokeRect(-width / 2, -height / 2, width, height);
@@ -2752,7 +2765,7 @@ class PlotterStudio {
     // Selection highlight (single or multi-select)
     const isSelected = paper.id === this.selectedPaperId || this.selectedPaperIds.has(paper.id);
     if (isSelected) {
-      this.ctx.strokeStyle = '#00E5FF';
+      this.ctx.strokeStyle = '#202020';
       this.ctx.lineWidth = 3 / this.scale;
       this.ctx.setLineDash([5 / this.scale, 5 / this.scale]);
       this.ctx.strokeRect(-width / 2, -height / 2, width, height);

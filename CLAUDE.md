@@ -38,7 +38,7 @@ CLI + desktop GUI ("Plotter Studio") for processing SVG files for pen plotters. 
 | `plotter_cli/.vpype.toml` | vpype G-code template |
 | `plotter_cli/gui/templates/index.html` | GUI HTML |
 | `plotter_cli/gui/static/app.js` | GUI JavaScript frontend |
-| `plotter_cli/gui/static/style.css` | GUI styles (Midnight Precision theme) |
+| `plotter_cli/gui/static/style.css` | GUI styles (sketch-2-inspired paper workspace theme) |
 
 ## Architecture
 

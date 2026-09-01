@@ -2,7 +2,7 @@
 
 A command-line tool and native desktop GUI (**Plotter Studio**) for processing SVG files for pen plotters. Wraps `vpype` for path optimization and G-code generation.
 
-Plotter Studio is a dark-themed desktop application for visually arranging multiple SVGs on a canvas, transforming them (move, scale, rotate), and exporting to G-code with paper placement guides and detailed statistics.
+Plotter Studio is a paper-like desktop application for visually arranging multiple SVGs on a canvas, transforming them (move, scale, rotate), and exporting to G-code with paper placement guides and detailed statistics.
 
 ## Installation
 
@@ -169,7 +169,7 @@ Print the guide G-code first, place your papers, then print color layers one by 
 ### Plotter Studio GUI
 
 - **Native Desktop App**: Runs as a native window via pywebview (or in browser)
-- **Modern Dark Theme**: Midnight Precision — dark mode with cyan accents
+- **Paper-like Theme**: A light, neutral workspace with rounded glass panels inspired by sketch-2
 - **Frameless Mode**: Borderless window with macOS vibrancy effect and custom traffic-light controls
 - **Canvas Tools**: Select, Pan, Zoom, Fullscreen
 - **Multi-select**: Shift-click to select multiple papers; move or align them together
